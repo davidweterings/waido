@@ -1,0 +1,70 @@
+{
+  "name": "waido",
+  "version": "0.1.0",
+  "description": "Wide event context library for Express, cron jobs, and serverless message handlers",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./express": {
+      "types": "./dist/adapters/express.d.ts",
+      "import": "./dist/adapters/express.js"
+    },
+    "./cron": {
+      "types": "./dist/adapters/cron.d.ts",
+      "import": "./dist/adapters/cron.js"
+    },
+    "./serverless": {
+      "types": "./dist/adapters/serverless.d.ts",
+      "import": "./dist/adapters/serverless.js"
+    }
+  },
+  "imports": {
+    "#src/*": {
+      "types": "./src/*",
+      "default": "./dist/*"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run clean && npm run build && npm test"
+  },
+  "keywords": [
+    "wide-event",
+    "context",
+    "asynclocalstorage",
+    "express",
+    "serverless",
+    "observability"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.15.17",
+    "express": "^5.1.0",
+    "typescript": "^5.8.3",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^2.1.8"
+  },
+  "packageManager": "pnpm@9.14.4+sha512.c8180b3fbe4e4bca02c94234717896b5529740a6cbadf19fa78254270403ea2f27d4e1d46a08a0f56c89b63dc8ebfd3ee53326da720273794e6200fcf0d184ab",
+  "dependencies": {
+    "better-result": "^2.7.0"
+  }
+}
