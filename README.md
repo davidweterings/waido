@@ -23,8 +23,9 @@ npm install waido
 ```ts
 import { initWaido, useLogger, withWideContext } from "waido";
 
-initWaido({
+const waido = initWaido({
   service: "billing-api",
+  emitTimeoutMs: 2_000,
   drains: [
     async (event) => {
       console.log(JSON.stringify(event));
@@ -41,6 +42,8 @@ const run = await withWideContext({ name: "rebuild-cache" }, async () => {
 if (run.isErr()) {
   console.error(run.error);
 }
+
+await waido.destroy();
 ```
 
 ## Result-first wrappers (`better-result`)
@@ -115,6 +118,65 @@ if (flush.isErr()) {
 }
 ```
 
+`flushWideEvents()` now waits for both:
+
+- in-flight wrapper or middleware scopes
+- pending async emit/drain work that has already started
+
+Use it during shutdown after you stop accepting new work.
+
+If you prefer a runtime-local shutdown API:
+
+```ts
+const waido = initWaido({
+  drains: [async (event) => console.log(event)],
+});
+
+await waido.destroy({ timeoutMs: 10_000 });
+```
+
+Queue/worker example:
+
+```ts
+const result = await withWideContext(
+  {
+    name: `consume ${message.topic}`,
+    kind: "queue",
+    data: {
+      messageId: message.id,
+    },
+  },
+  async () => {
+    await handleMessage(message);
+  },
+  {
+    emitTimeoutMs: 2_000,
+  },
+);
+
+if (result.isErr()) {
+  if (result.error._tag === "EmitWideEventTimeoutError") {
+    // decide whether to retry or fail the message
+  }
+}
+```
+
+Express shutdown example:
+
+```ts
+const waido = initWaido({
+  drains: [async (event) => console.log(event)],
+});
+
+server.close(async () => {
+  const destroy = await waido.destroy({ timeoutMs: 10_000 });
+
+  if (destroy.isErr()) {
+    console.error(destroy.error.message);
+  }
+});
+```
+
 ### 8) Sampling observability
 
 Sampler can return decision metadata:
@@ -153,9 +215,14 @@ Express adapter auto-parses `traceparent` / `tracestate` headers.
 import express from "express";
 import { createExpressWideEventMiddleware, initWaido, useLogger } from "waido";
 
-initWaido({ drains: [async (event) => console.log(event)] });
+const waido = initWaido({
+  service: "payments-api",
+  emitTimeoutMs: 2_000,
+  drains: [async (event) => console.log(event)],
+});
 
 const app = express();
+app.use(express.json());
 app.use(createExpressWideEventMiddleware());
 
 app.get("/users/:id", (req, res) => {
@@ -163,7 +230,18 @@ app.get("/users/:id", (req, res) => {
   log.setFields({ user: { id: req.params.id } });
   res.json({ ok: true });
 });
+
+const server = app.listen(3000);
+
+process.on("SIGTERM", () => {
+  server.close(async () => {
+    await waido.destroy({ timeoutMs: 10_000 });
+  });
+});
 ```
+
+The middleware emits automatically when the response finalizes. Internally it calls
+`awaitWideEventEmit(...)`, which wraps `logger.emit(...)`.
 
 ## Redaction and allowlist (userland example)
 

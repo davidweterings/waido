@@ -7,8 +7,9 @@ import {
   useLogger,
 } from "../src/index.js";
 
-initWaido({
+const waido = initWaido({
   service: "payments-api",
+  emitTimeoutMs: 2_000,
   drains: [createConsoleEmitter({ pretty: true })],
 });
 
@@ -18,6 +19,7 @@ app.use(
   createExpressWideEventMiddleware({
     includePaths: ["/checkout/**"],
     excludePaths: ["/checkout/health"],
+    emitTimeoutMs: 2_000,
   }),
 );
 
@@ -41,6 +43,12 @@ app.post("/checkout", async (req, res) => {
   });
 });
 
-app.listen(3000, () => {
+const server = app.listen(3000, () => {
   console.log("http://localhost:3000");
+});
+
+process.on("SIGTERM", () => {
+  server.close(async () => {
+    await waido.destroy({ timeoutMs: 10_000 });
+  });
 });

@@ -1,6 +1,11 @@
 import type { Request, RequestHandler } from "express";
 
-import { createWideEventLogger, runWithLoggerContext } from "#src/runtime.js";
+import {
+  awaitWideEventEmit,
+  createWideEventLogger,
+  runWithLoggerContext,
+  startWideEventScope,
+} from "#src/runtime.js";
 import {
   normalizeAdapterFilterResult,
   resolveIncludeExcludeDecision,
@@ -24,6 +29,7 @@ export interface ExpressWideEventOptions {
   excludePaths?: EventFilterPattern[];
   filter?: (request: Request) => boolean | WideEventSamplingDecision;
   mapData?: (request: Request) => WideEventData;
+  emitTimeoutMs?: number;
 }
 
 function resolveName(request: Request, value: ExpressWideEventOptions["name"]): string {
@@ -85,6 +91,7 @@ export function createExpressWideEventMiddleware(
     const traceContext = extractTraceContextFromHeaders(
       (request.headers ?? {}) as Record<string, string | string[] | undefined>,
     );
+    const closeScope = startWideEventScope();
 
     const logger = createWideEventLogger({
       name: resolveName(request, options.name),
@@ -107,15 +114,25 @@ export function createExpressWideEventMiddleware(
         logger.error(error);
       }
 
-      void logger.emit({
-        outcome,
-        status: response.statusCode,
-        data: {
-          response: {
-            statusCode: response.statusCode,
+      void awaitWideEventEmit(
+        logger,
+        {
+          outcome,
+          status: response.statusCode,
+          data: {
+            response: {
+              statusCode: response.statusCode,
+            },
           },
         },
-      });
+        {
+          timeoutMs: options.emitTimeoutMs,
+        },
+      )
+        .catch(() => undefined)
+        .finally(() => {
+          closeScope();
+        });
     };
 
     response.once("finish", () => {
@@ -133,6 +150,11 @@ export function createExpressWideEventMiddleware(
       finalize("error", error);
     });
 
-    runWithLoggerContext(logger, () => next());
+    try {
+      runWithLoggerContext(logger, () => next());
+    } catch (error) {
+      finalize("error", error);
+      throw error;
+    }
   };
 }

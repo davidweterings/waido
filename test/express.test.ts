@@ -5,6 +5,7 @@ import type { NextFunction, Request, Response } from "express";
 import {
   __resetWideEventsForTests,
   createExpressWideEventMiddleware,
+  flushWideEvents,
   initWaido,
   useLogger,
 } from "../src/index.js";
@@ -220,6 +221,59 @@ describe("express adapter", () => {
       traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       spanId: "bbbbbbbbbbbbbbbb",
       tracestate: "acme=1",
+    });
+  });
+
+  it("keeps flushWideEvents pending until an in-flight request finalizes", async () => {
+    const emittedEvents: WideEvent[] = [];
+    initWaido({
+      drains: [
+        async (event) => {
+          emittedEvents.push(event);
+        },
+      ],
+    });
+
+    const middleware = createExpressWideEventMiddleware();
+    const request = createMockRequest();
+    const response = createMockResponse(202);
+
+    await new Promise<void>((resolve, reject) => {
+      middleware(request, response, (error?: unknown) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        requireLogger().setFields({
+          queue: "payments",
+        });
+        resolve();
+      });
+    });
+
+    let flushSettled = false;
+    const flushPromise = flushWideEvents({
+      timeoutMs: 250,
+    }).then((result) => {
+      flushSettled = true;
+      return result;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(flushSettled).toBe(false);
+
+    response.writableEnded = true;
+    response.emit("finish");
+
+    const flushResult = await flushPromise;
+    expect(flushResult.isOk()).toBe(true);
+    await waitFor(() => emittedEvents.length === 1);
+    expect(emittedEvents[0]).toMatchObject({
+      status: 202,
+      data: {
+        queue: "payments",
+      },
     });
   });
 });

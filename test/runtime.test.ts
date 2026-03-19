@@ -2,6 +2,7 @@ import {
   __resetWideEventsForTests,
   createStructuredError,
   createWideEventLogger,
+  EmitWideEventTimeoutError,
   flushWideEvents,
   initWaido,
   runWithLoggerContext,
@@ -306,6 +307,49 @@ describe("runtime", () => {
     expect(drainedNames).toEqual(["async-flush"]);
   });
 
+  it("waits for active wide contexts before reporting flush completion", async () => {
+    const emittedEvents: WideEvent[] = [];
+    let releaseWork!: () => void;
+
+    initWaido({
+      drains: [
+        async (event) => {
+          emittedEvents.push(event);
+        },
+      ],
+    });
+
+    const workPromise = withWideContext(
+      {
+        name: "active-context",
+      },
+      async () => {
+        await new Promise<void>((resolve) => {
+          releaseWork = resolve;
+        });
+      },
+    );
+
+    let flushSettled = false;
+    const flushPromise = flushWideEvents({
+      timeoutMs: 250,
+    }).then((result) => {
+      flushSettled = true;
+      return result;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(flushSettled).toBe(false);
+
+    releaseWork();
+
+    const [workResult, flushResult] = await Promise.all([workPromise, flushPromise]);
+    expect(workResult.isOk()).toBe(true);
+    expect(flushResult.isOk()).toBe(true);
+    expect(emittedEvents).toHaveLength(1);
+    expect(emittedEvents[0].name).toBe("active-context");
+  });
+
   it("returns noop logger outside context", () => {
     const log = useLogger();
     log.setFields({ ignored: true });
@@ -356,8 +400,97 @@ describe("runtime", () => {
     expect(result.isErr()).toBe(true);
     if (result.isErr()) {
       expect(result.error._tag).toBe("FlushWideEventsTimeoutError");
+      expect(result.error.pendingOperations).toBe(1);
+      expect(result.error.activeScopes).toBe(0);
     }
 
     await flushWideEvents();
+  });
+
+  it("returns err from withWideContext when emit times out after successful work", async () => {
+    let releaseDrain!: () => void;
+
+    initWaido({
+      drains: [
+        async () =>
+          new Promise<void>((resolve) => {
+            releaseDrain = resolve;
+          }),
+      ],
+    });
+
+    const result = await withWideContext(
+      {
+        name: "slow-emit",
+      },
+      async () => "ok",
+      {
+        emitTimeoutMs: 10,
+      },
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error).toBeInstanceOf(EmitWideEventTimeoutError);
+      expect((result.error as EmitWideEventTimeoutError)._tag).toBe("EmitWideEventTimeoutError");
+    }
+
+    releaseDrain();
+    await flushWideEvents();
+  });
+
+  it("returns a runtime handle whose destroy waits for flush and resets the runtime", async () => {
+    const emittedEvents: WideEvent[] = [];
+    let releaseDrain!: () => void;
+
+    const runtime = initWaido({
+      drains: [
+        async (event) => {
+          await new Promise<void>((resolve) => {
+            releaseDrain = resolve;
+          });
+          emittedEvents.push(event);
+        },
+      ],
+    });
+
+    const workPromise = withWideContext(
+      {
+        name: "destroy-me",
+      },
+      async () => undefined,
+    );
+
+    let destroySettled = false;
+    const destroyPromise = runtime
+      .destroy({
+        timeoutMs: 250,
+      })
+      .then((result) => {
+        destroySettled = true;
+        return result;
+      });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(destroySettled).toBe(false);
+
+    releaseDrain();
+
+    const [workResult, destroyResult] = await Promise.all([workPromise, destroyPromise]);
+    expect(workResult.isOk()).toBe(true);
+    expect(destroyResult.isOk()).toBe(true);
+    expect(emittedEvents).toHaveLength(1);
+
+    emittedEvents.length = 0;
+
+    const afterDestroy = await withWideContext(
+      {
+        name: "after-destroy",
+      },
+      async () => undefined,
+    );
+
+    expect(afterDestroy.isOk()).toBe(true);
+    expect(emittedEvents).toHaveLength(0);
   });
 });

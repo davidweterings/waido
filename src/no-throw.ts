@@ -11,6 +11,14 @@ export class FlushWideEventsTimeoutError extends TaggedError("FlushWideEventsTim
   message: string;
   timeoutMs: number;
   pendingOperations: number;
+  activeScopes: number;
+}>() {}
+
+export class EmitWideEventTimeoutError extends TaggedError("EmitWideEventTimeoutError")<{
+  message: string;
+  timeoutMs: number;
+  eventId: string;
+  eventName: string;
 }>() {}
 
 export class InvalidSamplerRateError extends TaggedError("InvalidSamplerRateError")<{

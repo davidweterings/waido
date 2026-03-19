@@ -101,6 +101,7 @@ export interface WideEventRuntimeConfig {
   emitters?: WideEventEmitter[];
   payloadPolicy?: WideEventPayloadPolicy;
   traceContextExtractor?: WideEventTraceContextExtractor;
+  emitTimeoutMs?: number;
   now?: () => Date;
   idGenerator?: () => string;
   onEnricherError?: (
@@ -131,6 +132,7 @@ export interface EmitWideEventInput {
 export interface WithWideEventOptions {
   autoEmit?: boolean;
   emitOnError?: boolean;
+  emitTimeoutMs?: number;
   successOutcome?: Exclude<WideEventOutcome, "error">;
 }
 
