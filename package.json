@@ -1,6 +1,6 @@
 {
   "name": "waido",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Wide event context library for Express and standalone handlers",
   "keywords": [
     "asynclocalstorage",
