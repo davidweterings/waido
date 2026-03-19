@@ -4,7 +4,6 @@ on:
   release:
     types:
       - published
-  workflow_dispatch:
 
 jobs:
   publish:
@@ -17,6 +16,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Verify tag matches package version
+        run: |
+          PACKAGE_VERSION="v$(node -p 'require("./package.json").version')"
+          if [ "$PACKAGE_VERSION" != "${{ github.ref_name }}" ]; then
+            echo "::error::Tag ${{ github.ref_name }} does not match package.json version $PACKAGE_VERSION"
+            exit 1
+          fi
 
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
@@ -38,7 +45,7 @@ jobs:
         run: pnpm run build
 
       - name: Setup npm CLI for Trusted Publishing
-        run: npm install --global npm@^11.5.1
+        run: npm install --global --ignore-scripts npm@11.5.1
 
       - name: Publish
         run: npm publish --access public --provenance
