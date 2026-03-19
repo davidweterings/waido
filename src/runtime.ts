@@ -2,12 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import { Result } from "better-result";
 
-import { WideEventLogger } from "#src/logger.js";
-import {
-  FlushWideEventsTimeoutError,
-  NoActiveWideEventError,
-  type WideResult
-} from "#src/no-throw.js";
+import { noopLogger, WideEventLogger } from "#src/logger.js";
+import { FlushWideEventsTimeoutError, type WideResult } from "#src/no-throw.js";
 import { normalizeSamplingDecision } from "#src/sampler.js";
 import type {
   StartWideEventInput,
@@ -15,7 +11,7 @@ import type {
   WideEventRuntimeConfig,
   WideEventSamplingDecision,
   WideEventTraceContext,
-  WithWideEventOptions
+  WithWideEventOptions,
 } from "#src/types.js";
 import { createDefaultId } from "#src/utils.js";
 
@@ -53,11 +49,11 @@ const defaultState: RuntimeState = {
   now: () => new Date(),
   idGenerator: createDefaultId,
   onEnricherError: undefined,
-  onDrainError: undefined
+  onDrainError: undefined,
 };
 
 let state: RuntimeState = {
-  ...defaultState
+  ...defaultState,
 };
 
 function combineSamplingDecisions(
@@ -81,12 +77,12 @@ function combineSamplingDecisions(
 }
 
 function normalizeFilterDecision(
-  result: ReturnType<NonNullable<WideEventRuntimeConfig["filter"]>>
+  result: ReturnType<NonNullable<WideEventRuntimeConfig["filter"]>>,
 ): WideEventSamplingDecision {
   if (typeof result === "boolean") {
     return {
       sampled: result,
-      reason: result ? "filter_keep" : "filtered_out"
+      reason: result ? "filter_keep" : "filtered_out",
     };
   }
 
@@ -95,11 +91,11 @@ function normalizeFilterDecision(
 
 function mergeTraceContexts(
   extracted: WideEventTraceContext | undefined,
-  input: WideEventTraceContext | undefined
+  input: WideEventTraceContext | undefined,
 ): WideEventTraceContext | undefined {
   const merged = {
     ...extracted,
-    ...input
+    ...input,
   };
 
   if (
@@ -134,8 +130,8 @@ function createLogger(input: StartWideEventInput): WideEventLogger {
         err: (error) => ({
           sampled: false,
           reason: "filter_error",
-          rule: error.message
-        })
+          rule: error.message,
+        }),
       })
     : undefined;
 
@@ -144,7 +140,7 @@ function createLogger(input: StartWideEventInput): WideEventLogger {
   const extractedTraceContext = state.traceContextExtractor
     ? Result.try(() => state.traceContextExtractor!(input)).match({
         ok: (value) => value,
-        err: () => undefined
+        err: () => undefined,
       })
     : undefined;
 
@@ -159,7 +155,7 @@ function createLogger(input: StartWideEventInput): WideEventLogger {
       now: state.now,
       onEnricherError: state.onEnricherError,
       onDrainError: state.onDrainError,
-      trackPending
+      trackPending,
     },
     {
       ...input,
@@ -168,18 +164,18 @@ function createLogger(input: StartWideEventInput): WideEventLogger {
       id: state.idGenerator(),
       startedAt: state.now(),
       service: state.service,
-      environment: state.environment
-    }
+      environment: state.environment,
+    },
   );
 }
 
-export function initWideEvents(config: WideEventRuntimeConfig = {}): void {
+export function initWaido(config: WideEventRuntimeConfig = {}): void {
   const nextDrains =
     config.drains !== undefined
       ? [...config.drains]
       : config.emitters !== undefined
-      ? [...config.emitters]
-      : [...state.drains];
+        ? [...config.emitters]
+        : [...state.drains];
 
   state = {
     ...state,
@@ -194,7 +190,7 @@ export function initWideEvents(config: WideEventRuntimeConfig = {}): void {
     now: config.now ?? state.now,
     idGenerator: config.idGenerator ?? state.idGenerator,
     onEnricherError: config.onEnricherError ?? state.onEnricherError,
-    onDrainError: config.onDrainError ?? config.onEmitterError ?? state.onDrainError
+    onDrainError: config.onDrainError ?? config.onEmitterError ?? state.onDrainError,
   };
 }
 
@@ -214,12 +210,14 @@ export function addWideEventEmitter(emitter: WideEventDrain): void {
   addWideEventDrain(emitter);
 }
 
-export function setWideEventEnrichers(enrichers: NonNullable<WideEventRuntimeConfig["enrichers"]>): void {
+export function setWideEventEnrichers(
+  enrichers: NonNullable<WideEventRuntimeConfig["enrichers"]>,
+): void {
   state.enrichers = [...enrichers];
 }
 
 export function addWideEventEnricher(
-  enricher: NonNullable<WideEventRuntimeConfig["enrichers"]>[number]
+  enricher: NonNullable<WideEventRuntimeConfig["enrichers"]>[number],
 ): void {
   state.enrichers = [...state.enrichers, enricher];
 }
@@ -232,29 +230,14 @@ export function runWithLoggerContext<T>(logger: WideEventLogger, work: () => T):
   return storage.run(logger, work);
 }
 
-export function useLogger(): WideResult<WideEventLogger, NoActiveWideEventError> {
-  const logger = storage.getStore();
-
-  if (logger === undefined) {
-    return Result.err(
-      new NoActiveWideEventError({
-        message:
-          "No active wide event in AsyncLocalStorage. Wrap execution in withWideEvent(...) or one of the runtime adapters, then unwrap the Result."
-      })
-    );
-  }
-
-  return Result.ok(logger);
+export function useLogger(): WideEventLogger {
+  return storage.getStore() ?? noopLogger;
 }
 
-export function maybeLogger(): WideEventLogger | undefined {
-  return storage.getStore();
-}
-
-export async function withWideEvent<T>(
+export async function withWideContext<T>(
   input: StartWideEventInput,
   work: (logger: WideEventLogger) => Promise<T> | T,
-  options: WithWideEventOptions = {}
+  options: WithWideEventOptions = {},
 ): Promise<WideResult<T, unknown>> {
   const logger = createLogger(input);
   const autoEmit = options.autoEmit ?? true;
@@ -262,17 +245,15 @@ export async function withWideEvent<T>(
   const successOutcome = options.successOutcome ?? "success";
 
   return storage.run(logger, async () => {
-    const workResult = await Result.tryPromise(
-      {
-        try: () => Promise.resolve(work(logger)),
-        catch: (cause) => cause
-      }
-    );
+    const workResult = await Result.tryPromise({
+      try: () => Promise.resolve(work(logger)),
+      catch: (cause) => cause,
+    });
 
     if (workResult.isOk()) {
       if (autoEmit && !logger.hasEmitted()) {
         await logger.emit({
-          outcome: successOutcome
+          outcome: successOutcome,
         });
       }
 
@@ -285,7 +266,7 @@ export async function withWideEvent<T>(
 
     if (emitOnError && !logger.hasEmitted()) {
       await logger.emit({
-        outcome: "error"
+        outcome: "error",
       });
     }
 
@@ -294,59 +275,41 @@ export async function withWideEvent<T>(
 }
 
 export async function flushWideEvents(
-  options: FlushWideEventsOptions = {}
+  options: FlushWideEventsOptions = {},
 ): Promise<WideResult<void, FlushWideEventsTimeoutError>> {
   const timeoutMs = options.timeoutMs ?? 30_000;
   const deadline = Date.now() + timeoutMs;
 
   while (pendingOperations.size > 0) {
-    const trackedOperations = Array.from(pendingOperations);
-    const settlePromise = Promise.allSettled(trackedOperations).then(() => undefined);
     const remainingMs = deadline - Date.now();
-
     if (remainingMs <= 0) {
       return Result.err(
         new FlushWideEventsTimeoutError({
           timeoutMs,
           pendingOperations: pendingOperations.size,
-          message: `Timed out waiting for ${pendingOperations.size} pending wide event operation(s) to flush`
-        })
+          message: `Timed out waiting for ${pendingOperations.size} pending wide event operation(s) to flush`,
+        }),
       );
     }
 
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const raceResult = await Result.tryPromise(() =>
-      Promise.race([
-        settlePromise.finally(() => {
-          if (timeoutId !== undefined) {
-            clearTimeout(timeoutId);
-          }
-        }),
-        new Promise<void>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(
-              new FlushWideEventsTimeoutError({
-                timeoutMs,
-                pendingOperations: pendingOperations.size,
-                message: `Timed out waiting for ${pendingOperations.size} pending wide event operation(s) to flush`
-              })
-            );
-          }, remainingMs);
-        })
-      ])
-    );
+    let timer: ReturnType<typeof setTimeout>;
+    const timedOut = await Promise.race([
+      Promise.allSettled(Array.from(pendingOperations)).then(() => {
+        clearTimeout(timer);
+        return false as const;
+      }),
+      new Promise<true>((resolve) => {
+        timer = setTimeout(() => resolve(true), remainingMs);
+      }),
+    ]);
 
-    if (raceResult.isErr()) {
-      if (raceResult.error instanceof FlushWideEventsTimeoutError) {
-        return Result.err(raceResult.error);
-      }
-
+    if (timedOut) {
       return Result.err(
         new FlushWideEventsTimeoutError({
           timeoutMs,
           pendingOperations: pendingOperations.size,
-          message: `Timed out waiting for ${pendingOperations.size} pending wide event operation(s) to flush`
-        })
+          message: `Timed out waiting for ${pendingOperations.size} pending wide event operation(s) to flush`,
+        }),
       );
     }
   }
@@ -356,7 +319,7 @@ export async function flushWideEvents(
 
 export function __resetWideEventsForTests(): void {
   state = {
-    ...defaultState
+    ...defaultState,
   };
   pendingOperations.clear();
 }

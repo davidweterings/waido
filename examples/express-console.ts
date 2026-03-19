@@ -3,13 +3,13 @@ import express from "express";
 import {
   createConsoleEmitter,
   createExpressWideEventMiddleware,
-  initWideEvents,
-  useLogger
+  initWaido,
+  useLogger,
 } from "../src/index.js";
 
-initWideEvents({
+initWaido({
   service: "payments-api",
-  drains: [createConsoleEmitter({ pretty: true })]
+  drains: [createConsoleEmitter({ pretty: true })],
 });
 
 const app = express();
@@ -17,34 +17,27 @@ app.use(express.json());
 app.use(
   createExpressWideEventMiddleware({
     includePaths: ["/checkout/**"],
-    excludePaths: ["/checkout/health"]
-  })
+    excludePaths: ["/checkout/health"],
+  }),
 );
 
 app.post("/checkout", async (req, res) => {
   const log = useLogger();
-  if (log.isErr()) {
-    res.status(500).json({
-      ok: false,
-      error: log.error.message
-    });
-    return;
-  }
 
-  log.value.set({
+  log.setFields({
     user: {
-      id: req.body.userId
-    }
+      id: req.body.userId,
+    },
   });
 
-  log.value.set({
+  log.setFields({
     cart: {
-      items: req.body.items?.length ?? 0
-    }
+      items: req.body.items?.length ?? 0,
+    },
   });
 
   res.status(201).json({
-    ok: true
+    ok: true,
   });
 });
 

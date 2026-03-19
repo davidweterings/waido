@@ -5,20 +5,20 @@ import {
   normalizeAdapterFilterResult,
   resolveIncludeExcludeDecision,
   type EventFilterPattern,
-  normalizePath
+  normalizePath,
 } from "#src/filters.js";
 import { extractTraceContextFromHeaders } from "#src/trace.js";
 import type {
   WideEventData,
   WideEventKind,
   WideEventOutcome,
-  WideEventSamplingDecision
+  WideEventSamplingDecision,
 } from "#src/types.js";
 import { deepMerge } from "#src/utils.js";
 
 export interface ExpressWideEventOptions {
   name?: string | ((request: Request) => string);
-  kind?: Extract<WideEventKind, "http" | "custom">;
+  kind?: WideEventKind;
   requestIdHeader?: string;
   includePaths?: EventFilterPattern[];
   excludePaths?: EventFilterPattern[];
@@ -45,27 +45,24 @@ function resolvePath(request: Request): string {
 
 function resolveSamplingDecision(
   request: Request,
-  options: ExpressWideEventOptions
+  options: ExpressWideEventOptions,
 ): WideEventSamplingDecision | undefined {
   const path = resolvePath(request);
   return (
     resolveIncludeExcludeDecision(path, {
       include: options.includePaths,
       exclude: options.excludePaths,
-      targetName: "route"
+      targetName: "route",
     }) ?? normalizeAdapterFilterResult(options.filter?.(request), "route")
   );
 }
 
-function resolveRequestData(
-  request: Request,
-  options: ExpressWideEventOptions
-): WideEventData {
+function resolveRequestData(request: Request, options: ExpressWideEventOptions): WideEventData {
   const requestData: WideEventData = {
     request: {
       method: request.method,
-      path: request.originalUrl || request.url
-    }
+      path: request.originalUrl || request.url,
+    },
   };
 
   const requestIdHeader = options.requestIdHeader ?? "x-request-id";
@@ -82,11 +79,11 @@ function resolveRequestData(
 }
 
 export function createExpressWideEventMiddleware(
-  options: ExpressWideEventOptions = {}
+  options: ExpressWideEventOptions = {},
 ): RequestHandler {
   return (request, response, next) => {
     const traceContext = extractTraceContextFromHeaders(
-      (request.headers ?? {}) as Record<string, string | string[] | undefined>
+      (request.headers ?? {}) as Record<string, string | string[] | undefined>,
     );
 
     const logger = createWideEventLogger({
@@ -94,7 +91,7 @@ export function createExpressWideEventMiddleware(
       kind: options.kind ?? "http",
       data: resolveRequestData(request, options),
       traceContext,
-      samplingDecision: resolveSamplingDecision(request, options)
+      samplingDecision: resolveSamplingDecision(request, options),
     });
 
     let finalized = false;
@@ -115,9 +112,9 @@ export function createExpressWideEventMiddleware(
         status: response.statusCode,
         data: {
           response: {
-            statusCode: response.statusCode
-          }
-        }
+            statusCode: response.statusCode,
+          },
+        },
       });
     };
 

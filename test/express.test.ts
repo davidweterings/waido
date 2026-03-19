@@ -5,15 +5,16 @@ import type { NextFunction, Request, Response } from "express";
 import {
   __resetWideEventsForTests,
   createExpressWideEventMiddleware,
-  initWideEvents,
-  useLogger
+  initWaido,
+  useLogger,
 } from "../src/index.js";
 import type { WideEvent } from "../src/index.js";
 
-type MockResponse = Response & EventEmitter & {
-  statusCode: number;
-  writableEnded: boolean;
-};
+type MockResponse = Response &
+  EventEmitter & {
+    statusCode: number;
+    writableEnded: boolean;
+  };
 
 interface MockRequestOptions {
   path?: string;
@@ -24,7 +25,7 @@ function createMockRequest(options: MockRequestOptions = {}): Request {
   const path = options.path ?? "/users/42";
   const headers: Record<string, string> = {
     "x-request-id": "req-1",
-    ...options.headers
+    ...options.headers,
   };
 
   return {
@@ -33,9 +34,9 @@ function createMockRequest(options: MockRequestOptions = {}): Request {
     url: path,
     headers,
     params: {
-      id: "42"
+      id: "42",
     },
-    header: (name: string) => headers[name.toLowerCase()]
+    header: (name: string) => headers[name.toLowerCase()],
   } as unknown as Request;
 }
 
@@ -59,12 +60,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void
 }
 
 function requireLogger() {
-  const loggerResult = useLogger();
-  if (loggerResult.isErr()) {
-    throw loggerResult.error;
-  }
-
-  return loggerResult.value;
+  return useLogger();
 }
 
 describe("express adapter", () => {
@@ -74,14 +70,18 @@ describe("express adapter", () => {
 
   it("creates one wide event per request with shared context", async () => {
     const emittedEvents: WideEvent[] = [];
-    initWideEvents({
-      drains: [async (event) => { emittedEvents.push(event); }]
+    initWaido({
+      drains: [
+        async (event) => {
+          emittedEvents.push(event);
+        },
+      ],
     });
 
     const middleware = createExpressWideEventMiddleware({
       mapData: () => ({
-        app: "integration-test"
-      })
+        app: "integration-test",
+      }),
     });
 
     const request = createMockRequest();
@@ -97,16 +97,16 @@ describe("express adapter", () => {
         Promise.resolve()
           .then(async () => {
             const logger = requireLogger();
-            logger.set({
+            logger.setFields({
               user: {
-                id: request.params.id
-              }
+                id: request.params.id,
+              },
             });
 
             await Promise.resolve();
 
-            requireLogger().set({
-              operation: "load-user"
+            requireLogger().setFields({
+              operation: "load-user",
             });
 
             response.writableEnded = true;
@@ -128,30 +128,34 @@ describe("express adapter", () => {
       data: {
         app: "integration-test",
         request: {
-          id: "req-1"
+          id: "req-1",
         },
         user: {
-          id: "42"
+          id: "42",
         },
-        operation: "load-user"
-      }
+        operation: "load-user",
+      },
     });
     expect((emittedEvents[0].data.request as { method: string }).method).toBe("GET");
   });
 
   it("supports include/exclude path filters", async () => {
     const emittedEvents: WideEvent[] = [];
-    initWideEvents({
-      drains: [async (event) => { emittedEvents.push(event); }]
+    initWaido({
+      drains: [
+        async (event) => {
+          emittedEvents.push(event);
+        },
+      ],
     });
 
     const middleware = createExpressWideEventMiddleware({
       includePaths: ["/api/**"],
-      excludePaths: ["/api/health"]
+      excludePaths: ["/api/health"],
     });
 
     const request = createMockRequest({
-      path: "/api/health"
+      path: "/api/health",
     });
     const response = createMockResponse(200);
 
@@ -162,8 +166,8 @@ describe("express adapter", () => {
           return;
         }
 
-        requireLogger().set({
-          route: "health"
+        requireLogger().setFields({
+          route: "health",
         });
 
         response.writableEnded = true;
@@ -180,8 +184,12 @@ describe("express adapter", () => {
 
   it("extracts W3C trace context headers", async () => {
     const emittedEvents: WideEvent[] = [];
-    initWideEvents({
-      drains: [async (event) => { emittedEvents.push(event); }]
+    initWaido({
+      drains: [
+        async (event) => {
+          emittedEvents.push(event);
+        },
+      ],
     });
 
     const middleware = createExpressWideEventMiddleware();
@@ -189,8 +197,8 @@ describe("express adapter", () => {
     const request = createMockRequest({
       headers: {
         traceparent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
-        tracestate: "acme=1"
-      }
+        tracestate: "acme=1",
+      },
     });
     const response = createMockResponse(200);
 
@@ -211,7 +219,7 @@ describe("express adapter", () => {
     expect(emittedEvents[0]).toMatchObject({
       traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       spanId: "bbbbbbbbbbbbbbbb",
-      tracestate: "acme=1"
+      tracestate: "acme=1",
     });
   });
 });

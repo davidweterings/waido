@@ -16,10 +16,7 @@ export function deepMerge(target: WideEventData, source: WideEventData): WideEve
     const targetValue = target[key];
 
     if (isPlainObject(sourceValue)) {
-      target[key] = deepMerge(
-        isPlainObject(targetValue) ? targetValue : {},
-        sourceValue
-      );
+      target[key] = deepMerge(isPlainObject(targetValue) ? targetValue : {}, sourceValue);
       continue;
     }
 

@@ -1,6 +1,6 @@
 export type MaybePromise<T> = T | Promise<T>;
 
-export type WideEventKind = "http" | "cron" | "message" | "function" | "custom";
+export type WideEventKind = string;
 
 export type WideEventOutcome = "success" | "error" | "aborted";
 
@@ -58,18 +58,16 @@ export interface WideEvent {
   tracestate?: string;
   traceSource?: string;
   data: WideEventData;
-  error?: WideEventError;
+  errors: WideEventError[];
 }
 
 export type WideEventSamplerResult = boolean | WideEventSamplingDecision;
 
 export type WideEventSampler = (
-  event: Omit<WideEvent, "sampled" | "sampling">
+  event: Omit<WideEvent, "sampled" | "sampling">,
 ) => WideEventSamplerResult | Promise<WideEventSamplerResult>;
 
-export type WideEventDrain = (
-  event: WideEvent
-) => void | Promise<void>;
+export type WideEventDrain = (event: WideEvent) => void | Promise<void>;
 
 export type WideEventEmitter = WideEventDrain;
 
@@ -77,9 +75,7 @@ export interface WideEventEnrichContext {
   event: Omit<WideEvent, "sampled" | "sampling">;
 }
 
-export type WideEventEnricher = (
-  context: WideEventEnrichContext
-) => void | Promise<void>;
+export type WideEventEnricher = (context: WideEventEnrichContext) => void | Promise<void>;
 
 export interface WideEventPayloadPolicy {
   maxBytes: number;
@@ -89,12 +85,10 @@ export interface WideEventPayloadPolicy {
 
 export type WideEventFilterResult = boolean | WideEventSamplingDecision;
 
-export type WideEventFilter = (
-  input: StartWideEventInput
-) => WideEventFilterResult;
+export type WideEventFilter = (input: StartWideEventInput) => WideEventFilterResult;
 
 export type WideEventTraceContextExtractor = (
-  input: StartWideEventInput
+  input: StartWideEventInput,
 ) => WideEventTraceContext | undefined;
 
 export interface WideEventRuntimeConfig {
@@ -112,18 +106,10 @@ export interface WideEventRuntimeConfig {
   onEnricherError?: (
     error: unknown,
     event: Omit<WideEvent, "sampled" | "sampling">,
-    enricherIndex: number
+    enricherIndex: number,
   ) => void;
-  onDrainError?: (
-    error: unknown,
-    event: WideEvent,
-    drainIndex: number
-  ) => void;
-  onEmitterError?: (
-    error: unknown,
-    event: WideEvent,
-    emitterIndex: number
-  ) => void;
+  onDrainError?: (error: unknown, event: WideEvent, drainIndex: number) => void;
+  onEmitterError?: (error: unknown, event: WideEvent, emitterIndex: number) => void;
 }
 
 export interface StartWideEventInput {

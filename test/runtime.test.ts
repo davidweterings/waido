@@ -3,20 +3,15 @@ import {
   createStructuredError,
   createWideEventLogger,
   flushWideEvents,
-  initWideEvents,
+  initWaido,
   runWithLoggerContext,
   useLogger,
-  withWideEvent
+  withWideContext,
 } from "../src/index.js";
 import type { WideEvent } from "../src/index.js";
 
 function requireLogger() {
-  const loggerResult = useLogger();
-  if (loggerResult.isErr()) {
-    throw loggerResult.error;
-  }
-
-  return loggerResult.value;
+  return useLogger();
 }
 
 describe("runtime", () => {
@@ -26,30 +21,32 @@ describe("runtime", () => {
 
   it("stores and retrieves the logger from AsyncLocalStorage", async () => {
     const emittedEvents: WideEvent[] = [];
-    initWideEvents({
+    initWaido({
       service: "test-service",
-      drains: [async (event) => {
-        emittedEvents.push(event);
-      }]
+      drains: [
+        async (event) => {
+          emittedEvents.push(event);
+        },
+      ],
     });
 
-    const result = await withWideEvent(
+    const result = await withWideContext(
       {
         name: "unit-job",
-        kind: "function"
+        kind: "function",
       },
       async () => {
         const logger = requireLogger();
-        logger.set({
-          user: { id: "user_123" }
+        logger.setFields({
+          user: { id: "user_123" },
         });
 
         await Promise.resolve();
 
-        requireLogger().set({
-          step: "done"
+        requireLogger().setFields({
+          step: "done",
         });
-      }
+      },
     );
 
     expect(result.isOk()).toBe(true);
@@ -62,61 +59,65 @@ describe("runtime", () => {
       sampled: true,
       data: {
         user: { id: "user_123" },
-        step: "done"
-      }
+        step: "done",
+      },
     });
   });
 
   it("runs enrich hooks before drains", async () => {
     const emittedEvents: WideEvent[] = [];
-    initWideEvents({
+    initWaido({
       enrichers: [
         ({ event }) => {
           event.data.enriched = true;
-        }
+        },
       ],
-      drains: [async (event) => {
-        emittedEvents.push(event);
-      }]
+      drains: [
+        async (event) => {
+          emittedEvents.push(event);
+        },
+      ],
     });
 
-    const result = await withWideEvent(
+    const result = await withWideContext(
       {
-        name: "enrich-test"
+        name: "enrich-test",
       },
       async (logger) => {
-        logger.set({
-          input: true
+        logger.setFields({
+          input: true,
         });
-      }
+      },
     );
 
     expect(result.isOk()).toBe(true);
     expect(emittedEvents).toHaveLength(1);
     expect(emittedEvents[0].data).toMatchObject({
       input: true,
-      enriched: true
+      enriched: true,
     });
   });
 
   it("exposes sampling reason and rule on dropped events", async () => {
     const emittedEvents: WideEvent[] = [];
-    initWideEvents({
+    initWaido({
       sampler: () => ({
         sampled: false,
         reason: "healthcheck_noise",
-        rule: "name=health-check"
+        rule: "name=health-check",
       }),
-      drains: [async (event) => {
-        emittedEvents.push(event);
-      }]
+      drains: [
+        async (event) => {
+          emittedEvents.push(event);
+        },
+      ],
     });
 
-    const result = await withWideEvent(
+    const result = await withWideContext(
       {
-        name: "health-check"
+        name: "health-check",
       },
-      async () => undefined
+      async () => undefined,
     );
 
     expect(result.isOk()).toBe(true);
@@ -127,16 +128,16 @@ describe("runtime", () => {
   });
 
   it("returns sampling diagnostics from logger.emit", async () => {
-    initWideEvents({
+    initWaido({
       sampler: () => ({
         sampled: false,
         reason: "sampled_out",
-        rule: "rate:0"
-      })
+        rule: "rate:0",
+      }),
     });
 
     const logger = createWideEventLogger({
-      name: "drop-me"
+      name: "drop-me",
     });
 
     const event = await runWithLoggerContext(logger, async () => logger.emit());
@@ -144,21 +145,23 @@ describe("runtime", () => {
     expect(event.sampling).toMatchObject({
       sampled: false,
       reason: "sampled_out",
-      rule: "rate:0"
+      rule: "rate:0",
     });
   });
 
   it("adds structured error why/fix/link fields", async () => {
     const emittedEvents: WideEvent[] = [];
-    initWideEvents({
-      drains: [async (event) => {
-        emittedEvents.push(event);
-      }]
+    initWaido({
+      drains: [
+        async (event) => {
+          emittedEvents.push(event);
+        },
+      ],
     });
 
-    const result = await withWideEvent(
+    const result = await withWideContext(
       {
-        name: "checkout"
+        name: "checkout",
       },
       async () => {
         throw createStructuredError({
@@ -166,9 +169,9 @@ describe("runtime", () => {
           why: "Card declined by issuer",
           fix: "Use another card or retry in 10 minutes",
           link: "https://docs.example.com/payments",
-          code: "PAYMENT_DECLINED"
+          code: "PAYMENT_DECLINED",
         });
-      }
+      },
     );
 
     expect(result.isErr()).toBe(true);
@@ -177,64 +180,68 @@ describe("runtime", () => {
     }
 
     expect(emittedEvents).toHaveLength(1);
-    expect(emittedEvents[0].error).toMatchObject({
+    expect(emittedEvents[0].errors[0]).toMatchObject({
       message: "Payment failed",
       why: "Card declined by issuer",
       fix: "Use another card or retry in 10 minutes",
       link: "https://docs.example.com/payments",
-      code: "PAYMENT_DECLINED"
+      code: "PAYMENT_DECLINED",
     });
   });
 
   it("truncates oversized payloads when payload policy is truncate", async () => {
     const emittedEvents: WideEvent[] = [];
-    initWideEvents({
+    initWaido({
       payloadPolicy: {
         maxBytes: 450,
-        overflowStrategy: "truncate"
+        overflowStrategy: "truncate",
       },
-      drains: [async (event) => {
-        emittedEvents.push(event);
-      }]
+      drains: [
+        async (event) => {
+          emittedEvents.push(event);
+        },
+      ],
     });
 
-    const result = await withWideEvent(
+    const result = await withWideContext(
       {
         name: "oversized",
         data: {
           huge: "x".repeat(1000),
-          keep: "ok"
-        }
+          keep: "ok",
+        },
       },
-      async () => undefined
+      async () => undefined,
     );
 
     expect(result.isOk()).toBe(true);
     expect(emittedEvents).toHaveLength(1);
     expect(emittedEvents[0].payload).toMatchObject({
       limited: true,
-      strategy: "truncate"
+      strategy: "truncate",
     });
     expect(Buffer.byteLength(JSON.stringify(emittedEvents[0]), "utf8")).toBeLessThanOrEqual(450);
   });
 
   it("drops oversized payloads when payload policy is drop", async () => {
     const emittedEvents: WideEvent[] = [];
-    initWideEvents({
+    initWaido({
       payloadPolicy: {
         maxBytes: 300,
-        overflowStrategy: "drop"
+        overflowStrategy: "drop",
       },
-      drains: [async (event) => {
-        emittedEvents.push(event);
-      }]
+      drains: [
+        async (event) => {
+          emittedEvents.push(event);
+        },
+      ],
     });
 
     const logger = createWideEventLogger({
       name: "too-big",
       data: {
-        huge: "y".repeat(2000)
-      }
+        huge: "y".repeat(2000),
+      },
     });
 
     const event = await runWithLoggerContext(logger, async () => logger.emit());
@@ -245,23 +252,25 @@ describe("runtime", () => {
 
   it("extracts trace context from runtime extractor", async () => {
     const emittedEvents: WideEvent[] = [];
-    initWideEvents({
+    initWaido({
       traceContextExtractor: () => ({
         traceId: "trace-1",
         spanId: "span-1",
         traceparent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
-        source: "test"
+        source: "test",
       }),
-      drains: [async (event) => {
-        emittedEvents.push(event);
-      }]
+      drains: [
+        async (event) => {
+          emittedEvents.push(event);
+        },
+      ],
     });
 
-    const result = await withWideEvent(
+    const result = await withWideContext(
       {
-        name: "trace-test"
+        name: "trace-test",
       },
-      async () => undefined
+      async () => undefined,
     );
 
     expect(result.isOk()).toBe(true);
@@ -269,23 +278,23 @@ describe("runtime", () => {
       traceId: "trace-1",
       spanId: "span-1",
       traceparent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
-      traceSource: "test"
+      traceSource: "test",
     });
   });
 
   it("flushes pending wide event emits", async () => {
     const drainedNames: string[] = [];
-    initWideEvents({
+    initWaido({
       drains: [
         async (event) => {
           await new Promise((resolve) => setTimeout(resolve, 25));
           drainedNames.push(event.name);
-        }
-      ]
+        },
+      ],
     });
 
     const logger = createWideEventLogger({
-      name: "async-flush"
+      name: "async-flush",
     });
 
     runWithLoggerContext(logger, () => {
@@ -297,22 +306,23 @@ describe("runtime", () => {
     expect(drainedNames).toEqual(["async-flush"]);
   });
 
-  it("returns err from useLogger outside context", () => {
-    const result = useLogger();
-    expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error._tag).toBe("NoActiveWideEventError");
-    }
+  it("returns noop logger outside context", () => {
+    const log = useLogger();
+    log.setFields({ ignored: true });
+    log.increment("counter");
+    log.append("list", "item");
+    log.error(new Error("ignored"));
+    expect(log.hasEmitted()).toBe(false);
   });
 
-  it("returns err from withWideEvent when work throws", async () => {
-    const result = await withWideEvent(
+  it("returns err from withWideContext when work throws", async () => {
+    const result = await withWideContext(
       {
-        name: "result-fail"
+        name: "result-fail",
       },
       async () => {
         throw new Error("boom");
-      }
+      },
     );
 
     expect(result.isErr()).toBe(true);
@@ -322,17 +332,17 @@ describe("runtime", () => {
   });
 
   it("returns err from flushWideEvents on timeout", async () => {
-    initWideEvents({
+    initWaido({
       drains: [
         async () =>
           new Promise<void>((resolve) => {
             setTimeout(resolve, 200);
-          })
-      ]
+          }),
+      ],
     });
 
     const logger = createWideEventLogger({
-      name: "slow-drain"
+      name: "slow-drain",
     });
 
     runWithLoggerContext(logger, () => {
@@ -340,7 +350,7 @@ describe("runtime", () => {
     });
 
     const result = await flushWideEvents({
-      timeoutMs: 10
+      timeoutMs: 10,
     });
 
     expect(result.isErr()).toBe(true);

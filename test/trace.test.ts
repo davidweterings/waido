@@ -6,7 +6,7 @@ describe("trace helpers", () => {
     expect(trace).toMatchObject({
       traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       spanId: "bbbbbbbbbbbbbbbb",
-      traceparent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"
+      traceparent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
     });
   });
 
@@ -17,13 +17,13 @@ describe("trace helpers", () => {
   it("extracts trace context from headers", () => {
     const trace = extractTraceContextFromHeaders({
       traceparent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
-      tracestate: "vendor=t1"
+      tracestate: "vendor=t1",
     });
 
     expect(trace).toMatchObject({
       traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       spanId: "bbbbbbbbbbbbbbbb",
-      tracestate: "vendor=t1"
+      tracestate: "vendor=t1",
     });
   });
 });

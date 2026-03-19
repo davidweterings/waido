@@ -1,6 +1,6 @@
 import { context, trace } from "@opentelemetry/api";
 
-import { initWideEvents, withWideEvent } from "../src/index.js";
+import { initWaido, withWideContext } from "../src/index.js";
 import type { WideEvent } from "../src/index.js";
 
 function createOpenTelemetryEmitter(): (event: WideEvent) => void {
@@ -17,27 +17,27 @@ function createOpenTelemetryEmitter(): (event: WideEvent) => void {
       "wide_event.kind": event.kind,
       "wide_event.outcome": event.outcome,
       "wide_event.status": event.status ? String(event.status) : "n/a",
-      "wide_event.duration_ms": event.durationMs
+      "wide_event.duration_ms": event.durationMs,
     });
   };
 }
 
-initWideEvents({
+initWaido({
   service: "otel-demo",
-  drains: [createOpenTelemetryEmitter()]
+  drains: [createOpenTelemetryEmitter()],
 });
 
-const result = await withWideEvent(
+const result = await withWideContext(
   {
     name: "checkout",
-    kind: "function"
+    kind: "function",
   },
   async (log) => {
-    log.set({
+    log.setFields({
       orderId: "ord_111",
-      total: 12000
+      total: 12000,
     });
-  }
+  },
 );
 
 if (result.isErr()) {

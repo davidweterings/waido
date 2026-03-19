@@ -1,9 +1,4 @@
-import {
-  createConsoleEmitter,
-  initWideEvents,
-  useLogger,
-  withWideEvent
-} from "../src/index.js";
+import { createConsoleEmitter, initWaido, useLogger, withWideContext } from "../src/index.js";
 import type { WideEventData } from "../src/index.js";
 
 const ALLOWED_TOP_LEVEL_KEYS = new Set(["request", "user", "order", "tenantId"]);
@@ -43,43 +38,39 @@ function allowlistTopLevel(data: WideEventData): WideEventData {
   return output;
 }
 
-initWideEvents({
+initWaido({
   service: "orders-api",
   enrichers: [
     ({ event }) => {
       const allowlisted = allowlistTopLevel(event.data);
       event.data = redactValue(allowlisted) as WideEventData;
-    }
+    },
   ],
-  drains: [createConsoleEmitter({ pretty: true })]
+  drains: [createConsoleEmitter({ pretty: true })],
 });
 
-const result = await withWideEvent(
+const result = await withWideContext(
   {
     name: "create-order",
-    kind: "function"
+    kind: "function",
   },
   async () => {
     const log = useLogger();
-    if (log.isErr()) {
-      return;
-    }
-
-    log.value.set({
+    log.setFields({
       tenantId: "acme",
       user: {
         id: "u_42",
-        email: "john@acme.dev"
+        email: "john@acme.dev",
       },
       request: {
         ip: "1.2.3.4",
-        authorization: "Bearer secret-token"
+        authorization: "Bearer secret-token",
       },
       debugOnly: {
-        sql: "select * from orders"
-      }
+        sql: "select * from orders",
+      },
     });
-  }
+  },
 );
 
 if (result.isErr()) {

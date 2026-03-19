@@ -3,7 +3,7 @@ import type {
   WideEvent,
   WideEventPayloadInfo,
   WideEventPayloadPolicy,
-  WideEventSamplingDecision
+  WideEventSamplingDecision,
 } from "#src/types.js";
 import { cloneData } from "#src/utils.js";
 
@@ -16,20 +16,20 @@ function getJsonSizeBytes(value: unknown): number {
 function createTruncatedDataMarker(dataKeys: string[]): Record<string, unknown> {
   return {
     __truncated: true,
-    __keys: dataKeys.slice(0, 25)
+    __keys: dataKeys.slice(0, 25),
   };
 }
 
 function truncateEventDataToFit(
   event: WideEventCandidate,
   maxBytes: number,
-  placeholder: string
+  placeholder: string,
 ): number {
   const data = cloneData(event.data);
   const sizedKeys = Object.keys(data)
     .map((key) => ({
       key,
-      size: getJsonSizeBytes(data[key])
+      size: getJsonSizeBytes(data[key]),
     }))
     .sort((left, right) => right.size - left.size);
 
@@ -51,7 +51,7 @@ function truncateEventDataToFit(
   }
 
   event.data = {
-    __truncated: true
+    __truncated: true,
   };
 
   return getJsonSizeBytes(event);
@@ -67,13 +67,13 @@ function createDropDecision(reason: string, rule: string): WideEventSamplingDeci
   return {
     sampled: false,
     reason,
-    rule
+    rule,
   };
 }
 
 export function applyPayloadPolicy(
   event: WideEventCandidate,
-  policy: WideEventPayloadPolicy | undefined
+  policy: WideEventPayloadPolicy | undefined,
 ): PayloadPolicyResult {
   const initialSize = getJsonSizeBytes(event);
 
@@ -81,15 +81,15 @@ export function applyPayloadPolicy(
     return {
       payload: {
         sizeBytes: initialSize,
-        limited: false
-      }
+        limited: false,
+      },
     };
   }
 
   if (!Number.isFinite(policy.maxBytes) || policy.maxBytes <= 0) {
     const error = new InvalidPayloadPolicyError({
       maxBytes: policy.maxBytes,
-      message: `payloadPolicy.maxBytes must be a positive number. Received: ${policy.maxBytes}`
+      message: `payloadPolicy.maxBytes must be a positive number. Received: ${policy.maxBytes}`,
     });
 
     return {
@@ -97,10 +97,13 @@ export function applyPayloadPolicy(
         sizeBytes: initialSize,
         limited: true,
         maxBytes: policy.maxBytes,
-        strategy: "drop"
+        strategy: "drop",
       },
-      forcedSamplingDecision: createDropDecision("invalid_payload_policy", `maxBytes:${policy.maxBytes}`),
-      error
+      forcedSamplingDecision: createDropDecision(
+        "invalid_payload_policy",
+        `maxBytes:${policy.maxBytes}`,
+      ),
+      error,
     };
   }
 
@@ -109,8 +112,8 @@ export function applyPayloadPolicy(
       payload: {
         sizeBytes: initialSize,
         limited: false,
-        maxBytes: policy.maxBytes
-      }
+        maxBytes: policy.maxBytes,
+      },
     };
   }
 
@@ -122,16 +125,16 @@ export function applyPayloadPolicy(
         sizeBytes: initialSize,
         limited: true,
         maxBytes: policy.maxBytes,
-        strategy
+        strategy,
       },
-      forcedSamplingDecision: createDropDecision("payload_dropped", `maxBytes:${policy.maxBytes}`)
+      forcedSamplingDecision: createDropDecision("payload_dropped", `maxBytes:${policy.maxBytes}`),
     };
   }
 
   if (strategy === "error") {
     const error = new InvalidPayloadPolicyError({
       maxBytes: policy.maxBytes,
-      message: `Wide event payload exceeded maxBytes (${initialSize} > ${policy.maxBytes}) with overflowStrategy=error`
+      message: `Wide event payload exceeded maxBytes (${initialSize} > ${policy.maxBytes}) with overflowStrategy=error`,
     });
 
     return {
@@ -139,13 +142,13 @@ export function applyPayloadPolicy(
         sizeBytes: initialSize,
         limited: true,
         maxBytes: policy.maxBytes,
-        strategy
+        strategy,
       },
       forcedSamplingDecision: createDropDecision(
         "payload_policy_error",
-        `maxBytes:${policy.maxBytes};strategy:error`
+        `maxBytes:${policy.maxBytes};strategy:error`,
       ),
-      error
+      error,
     };
   }
 
@@ -157,7 +160,7 @@ export function applyPayloadPolicy(
       sizeBytes: finalSize,
       limited: true,
       maxBytes: policy.maxBytes,
-      strategy
-    }
+      strategy,
+    },
   };
 }

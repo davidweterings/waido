@@ -4,7 +4,7 @@ import { InvalidSamplerRateError } from "#src/no-throw.js";
 import type {
   WideEventSampler,
   WideEventSamplerResult,
-  WideEventSamplingDecision
+  WideEventSamplingDecision,
 } from "#src/types.js";
 
 function isValidRate(rate: number): boolean {
@@ -13,14 +13,14 @@ function isValidRate(rate: number): boolean {
 
 export function createRateSamplerResult(
   rate: number,
-  random: () => number = Math.random
+  random: () => number = Math.random,
 ): Result<WideEventSampler, InvalidSamplerRateError> {
   if (!isValidRate(rate)) {
     return Result.err(
       new InvalidSamplerRateError({
         rate,
-        message: `Sampler rate must be between 0 and 1. Received: ${rate}`
-      })
+        message: `Sampler rate must be between 0 and 1. Received: ${rate}`,
+      }),
     );
   }
 
@@ -29,14 +29,14 @@ export function createRateSamplerResult(
     return {
       sampled,
       reason: sampled ? "rate_keep" : "rate_drop",
-      rule: `rate:${rate}`
+      rule: `rate:${rate}`,
     };
   });
 }
 
 export function createRateSampler(
   rate: number,
-  random: () => number = Math.random
+  random: () => number = Math.random,
 ): WideEventSampler {
   const result = createRateSamplerResult(rate, random);
   if (result.isOk()) {
@@ -46,14 +46,14 @@ export function createRateSampler(
   return () => ({
     sampled: false,
     reason: "invalid_sampler_rate",
-    rule: `rate:${rate}`
+    rule: `rate:${rate}`,
   });
 }
 
 export function createNameRateSamplerResult(
   ratesByName: Record<string, number>,
   fallbackRate = 1,
-  random: () => number = Math.random
+  random: () => number = Math.random,
 ): Result<WideEventSampler, InvalidSamplerRateError> {
   const fallbackResult = createRateSamplerResult(fallbackRate, random);
   if (fallbackResult.isErr()) {
@@ -65,8 +65,8 @@ export function createNameRateSamplerResult(
       return Result.err(
         new InvalidSamplerRateError({
           rate,
-          message: `Sampler rate must be between 0 and 1. Received: ${rate}`
-        })
+          message: `Sampler rate must be between 0 and 1. Received: ${rate}`,
+        }),
       );
     }
   }
@@ -77,7 +77,7 @@ export function createNameRateSamplerResult(
     return {
       sampled,
       reason: sampled ? "name_rate_keep" : "name_rate_drop",
-      rule: `${event.name}:${rate}`
+      rule: `${event.name}:${rate}`,
     };
   });
 }
@@ -85,7 +85,7 @@ export function createNameRateSamplerResult(
 export function createNameRateSampler(
   ratesByName: Record<string, number>,
   fallbackRate = 1,
-  random: () => number = Math.random
+  random: () => number = Math.random,
 ): WideEventSampler {
   const result = createNameRateSamplerResult(ratesByName, fallbackRate, random);
   if (result.isOk()) {
@@ -95,7 +95,7 @@ export function createNameRateSampler(
   return () => ({
     sampled: false,
     reason: "invalid_sampler_rate",
-    rule: "name_rate_config"
+    rule: "name_rate_config",
   });
 }
 
@@ -121,18 +121,19 @@ export function composeSamplers(...samplers: WideEventSampler[]): WideEventSampl
   };
 }
 
-export function normalizeSamplingDecision(result: WideEventSamplerResult): WideEventSamplingDecision {
+export function normalizeSamplingDecision(
+  result: WideEventSamplerResult,
+): WideEventSamplingDecision {
   if (typeof result === "boolean") {
     return {
       sampled: result,
-      reason: result ? "sampler_keep" : "sampler_drop"
+      reason: result ? "sampler_keep" : "sampler_drop",
     };
   }
 
   return {
     sampled: result.sampled,
     reason: result.reason,
-    rule: result.rule
+    rule: result.rule,
   };
 }
-

@@ -1,10 +1,31 @@
 {
   "name": "waido",
-  "version": "0.1.0",
-  "description": "Wide event context library for Express, cron jobs, and serverless message handlers",
+  "version": "0.2.0",
+  "description": "Wide event context library for Express and standalone handlers",
+  "keywords": [
+    "asynclocalstorage",
+    "context",
+    "express",
+    "observability",
+    "serverless",
+    "wide-event"
+  ],
+  "license": "MIT",
+  "author": "",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "imports": {
+    "#src/*": {
+      "types": "./src/*",
+      "default": "./dist/*"
+    }
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -23,48 +44,34 @@
       "import": "./dist/adapters/serverless.js"
     }
   },
-  "imports": {
-    "#src/*": {
-      "types": "./src/*",
-      "default": "./dist/*"
-    }
-  },
-  "files": [
-    "dist",
-    "LICENSE",
-    "README.md"
-  ],
-  "engines": {
-    "node": ">=22.0.0"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit",
+    "lint": "oxlint",
+    "fmt": "oxfmt --write .",
+    "fmt:check": "oxfmt --check .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "check": "pnpm typecheck && pnpm lint && pnpm fmt:check && pnpm test",
     "prepublishOnly": "npm run clean && npm run build && npm test"
   },
-  "keywords": [
-    "wide-event",
-    "context",
-    "asynclocalstorage",
-    "express",
-    "serverless",
-    "observability"
-  ],
-  "author": "",
-  "license": "MIT",
+  "dependencies": {
+    "better-result": "^2.7.0"
+  },
   "devDependencies": {
     "@types/express": "^5.0.3",
     "@types/node": "^22.15.17",
+    "@typescript/native-preview": "7.0.0-dev.20260319.1",
     "express": "^5.1.0",
+    "oxfmt": "^0.41.0",
+    "oxlint": "^1.56.0",
     "typescript": "^5.8.3",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^2.1.8"
   },
-  "packageManager": "pnpm@9.14.4+sha512.c8180b3fbe4e4bca02c94234717896b5529740a6cbadf19fa78254270403ea2f27d4e1d46a08a0f56c89b63dc8ebfd3ee53326da720273794e6200fcf0d184ab",
-  "dependencies": {
-    "better-result": "^2.7.0"
-  }
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "packageManager": "pnpm@9.14.4+sha512.c8180b3fbe4e4bca02c94234717896b5529740a6cbadf19fa78254270403ea2f27d4e1d46a08a0f56c89b63dc8ebfd3ee53326da720273794e6200fcf0d184ab"
 }

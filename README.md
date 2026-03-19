@@ -1,12 +1,10 @@
 # waido
 
-ESM-only wide event library for Node.js (`>=22`) focused on context lifecycle, not logging opinionation.
+Yet another wide event library.
 
-Inspired by the wide-event approach from `loggingsucks.com` and `evlog`, with adapters for:
+Inspired by the wide-event approach from `loggingsucks.com`.
 
-- Express middleware
-- cron jobs
-- serverless/message handlers (Service Bus style)
+Focussed on Express middleware or standalone use via `withWideContext`.
 
 ## Install
 
@@ -17,68 +15,55 @@ npm install waido
 ## Core idea
 
 - Build one mutable wide event during execution.
-- Access it anywhere with `useLogger()` via `AsyncLocalStorage`.
+- Access it anywhere with `useLogger()` via `AsyncLocalStorage` to avoid passing it down forever.
 - Emit once at the end (auto by wrappers), with sampler decisions and diagnostics.
-- All core APIs are no-throw and return `Result` (`better-result`).
 
 ## Quick start
 
 ```ts
-import { initWideEvents, useLogger, withWideEvent } from "waido";
+import { initWaido, useLogger, withWideContext } from "waido";
 
-initWideEvents({
+initWaido({
   service: "billing-api",
   drains: [
     async (event) => {
       console.log(JSON.stringify(event));
-    }
-  ]
+    },
+  ],
 });
 
-const run = await withWideEvent(
-  { name: "rebuild-cache", kind: "function" },
-  async () => {
-    const log = useLogger();
-    if (log.isErr()) return;
-
-    log.value.set({ tenantId: "acme" });
-    log.value.set({ cache: { phase: "done" } });
-  }
-);
+const run = await withWideContext({ name: "rebuild-cache" }, async () => {
+  const log = useLogger();
+  log.setFields({ tenantId: "acme" });
+  log.setFields({ cache: { phase: "done" } });
+});
 
 if (run.isErr()) {
   console.error(run.error);
 }
 ```
 
-## Result-first API (`better-result`)
+## Result-first wrappers (`better-result`)
 
-No throwing wrappers are exposed in the public API.
-
-- `useLogger()`
-- `withWideEvent()`
+- `withWideContext()`
 - `flushWideEvents()`
-- `withCronWideEvent()`
-- `runCronWideEvent()`
-- `withMessageWideEvent()`
-- `withServerlessWideEvent()`
 
 ## New runtime features
 
 ### 1) Lifecycle hooks (`enrich` + `drain`)
 
 ```ts
-initWideEvents({
+initWaido({
   enrichers: [
     ({ event }) => {
       event.data.deploymentId = process.env.DEPLOYMENT_ID;
-    }
+    },
   ],
   drains: [
     async (event) => {
       // send to sink
-    }
-  ]
+    },
+  ],
 });
 ```
 
@@ -91,7 +76,7 @@ throw createStructuredError({
   message: "Payment failed",
   why: "Card declined by issuer",
   fix: "Retry with another card",
-  link: "https://docs.example.com/payments"
+  link: "https://docs.example.com/payments",
 });
 ```
 
@@ -102,32 +87,22 @@ Express:
 ```ts
 createExpressWideEventMiddleware({
   includePaths: ["/api/**"],
-  excludePaths: ["/api/health"]
-});
-```
-
-Cron/serverless wrappers:
-
-```ts
-withCronWideEvent("nightly-sync", handler, {
-  excludeNames: ["health-*"]
+  excludePaths: ["/api/health"],
 });
 ```
 
 ### 6) Bounded payload policy
 
 ```ts
-initWideEvents({
+initWaido({
   payloadPolicy: {
     maxBytes: 32_000,
-    overflowStrategy: "truncate" // "truncate" | "drop" | "error"
-  }
+    overflowStrategy: "truncate", // "truncate" | "drop" | "error"
+  },
 });
 ```
 
 ### 7) Flush semantics
-
-Serverless wrappers call `flushWideEvents()` before returning (default `flushAfterCompletion: true`).
 
 Manual flush:
 
@@ -145,12 +120,12 @@ if (flush.isErr()) {
 Sampler can return decision metadata:
 
 ```ts
-initWideEvents({
+initWaido({
   sampler: (event) => ({
     sampled: event.outcome === "error",
     reason: event.outcome === "error" ? "always_keep_errors" : "non_error_drop",
-    rule: "error_only"
-  })
+    rule: "error_only",
+  }),
 });
 ```
 
@@ -169,7 +144,6 @@ import { extractTraceContextFromHeaders, parseTraceparent } from "waido";
 ```
 
 Express adapter auto-parses `traceparent` / `tracestate` headers.
-Message adapter auto-parses trace data from common message metadata (`headers`, `applicationProperties`, `properties`).
 
 ## Adapters
 
@@ -177,54 +151,18 @@ Message adapter auto-parses trace data from common message metadata (`headers`, 
 
 ```ts
 import express from "express";
-import { createExpressWideEventMiddleware, initWideEvents, useLogger } from "waido";
+import { createExpressWideEventMiddleware, initWaido, useLogger } from "waido";
 
-initWideEvents({ drains: [async (event) => console.log(event)] });
+initWaido({ drains: [async (event) => console.log(event)] });
 
 const app = express();
 app.use(createExpressWideEventMiddleware());
 
 app.get("/users/:id", (req, res) => {
   const log = useLogger();
-  if (log.isOk()) {
-    log.value.set({ user: { id: req.params.id } });
-  }
+  log.setFields({ user: { id: req.params.id } });
   res.json({ ok: true });
 });
-```
-
-### Cron
-
-```ts
-import { useLogger, withCronWideEvent } from "waido";
-
-const job = withCronWideEvent("nightly-sync", async () => {
-  const log = useLogger();
-  if (log.isErr()) return;
-  log.value.set({ stage: "syncing" });
-});
-
-const result = await job();
-if (result.isErr()) {
-  console.error(result.error);
-}
-```
-
-### Serverless / message
-
-```ts
-import { useLogger, withMessageWideEvent } from "waido";
-
-const handler = withMessageWideEvent(async (message: { messageId: string }) => {
-  const log = useLogger();
-  if (log.isErr()) return;
-  log.value.set({ messageId: message.messageId });
-});
-
-const result = await handler({ messageId: "m1" }, {});
-if (result.isErr()) {
-  console.error(result.error);
-}
 ```
 
 ## Redaction and allowlist (userland example)
@@ -233,13 +171,13 @@ Redaction/allowlist is intentionally not hardcoded in core.
 Use an enricher to apply policy in your app:
 
 ```ts
-initWideEvents({
+initWaido({
   enrichers: [
     ({ event }) => {
       // apply allowlist + redact before drains
       event.data = redactAndAllowlist(event.data);
-    }
-  ]
+    },
+  ],
 });
 ```
 
@@ -248,6 +186,11 @@ See: `examples/redaction-allowlist-userland.ts`.
 ## OpenTelemetry emission example
 
 See: `examples/emit-to-opentelemetry.ts`.
+
+## Sentry exception drain example
+
+See: `examples/sentry-exception-drain.ts`.
+The example uses an explicit Sentry tag allowlist so high-cardinality fields stay in context, not tags.
 
 ## Internal `#src/*` imports
 

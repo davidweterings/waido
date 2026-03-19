@@ -2,7 +2,7 @@ import {
   createNameRateSampler,
   createNameRateSamplerResult,
   createRateSampler,
-  createRateSamplerResult
+  createRateSamplerResult,
 } from "../src/index.js";
 
 describe("sampler helpers", () => {
@@ -21,7 +21,7 @@ describe("sampler helpers", () => {
       endedAt: new Date().toISOString(),
       durationMs: 1,
       outcome: "success",
-      data: {}
+      data: {},
     });
 
     expect(typeof decision).toBe("object");
@@ -31,9 +31,9 @@ describe("sampler helpers", () => {
   it("returns err from createNameRateSamplerResult for invalid map rate", () => {
     const result = createNameRateSamplerResult(
       {
-        test: -1
+        test: -1,
       },
-      1
+      1,
     );
     expect(result.isErr()).toBe(true);
   });
@@ -41,9 +41,9 @@ describe("sampler helpers", () => {
   it("returns a usable sampler for valid name rates", async () => {
     const sampler = createNameRateSampler(
       {
-        always: 1
+        always: 1,
       },
-      0
+      0,
     );
 
     const decision = await sampler({
@@ -54,7 +54,7 @@ describe("sampler helpers", () => {
       endedAt: new Date().toISOString(),
       durationMs: 1,
       outcome: "success",
-      data: {}
+      data: {},
     });
 
     if (typeof decision === "boolean") {

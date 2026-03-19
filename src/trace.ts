@@ -1,11 +1,10 @@
 import type { WideEventTraceContext } from "#src/types.js";
 
-const TRACEPARENT_REGEX =
-  /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
+const TRACEPARENT_REGEX = /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
 
 function readHeader(
   headers: Record<string, string | string[] | undefined>,
-  name: string
+  name: string,
 ): string | undefined {
   const direct = headers[name];
   if (typeof direct === "string") {
@@ -39,12 +38,12 @@ export function parseTraceparent(traceparent: string): WideEventTraceContext | u
     traceId: match[2],
     spanId: match[3],
     traceparent: trimmed,
-    source: "traceparent"
+    source: "traceparent",
   };
 }
 
 export function extractTraceContextFromHeaders(
-  headers: Record<string, string | string[] | undefined>
+  headers: Record<string, string | string[] | undefined>,
 ): WideEventTraceContext | undefined {
   const traceparent = readHeader(headers, "traceparent");
   const tracestate = readHeader(headers, "tracestate");

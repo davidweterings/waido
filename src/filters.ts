@@ -15,9 +15,7 @@ function escapeRegex(value: string): string {
 function globToRegExp(pattern: string): RegExp {
   const placeholder = "__WIDE_EVENT_DOUBLE_STAR__";
   const escaped = escapeRegex(pattern.replaceAll("**", placeholder));
-  const regexSource = escaped
-    .replaceAll(placeholder, ".*")
-    .replaceAll("*", "[^/]*");
+  const regexSource = escaped.replaceAll(placeholder, ".*").replaceAll("*", "[^/]*");
   return new RegExp(`^${regexSource}$`);
 }
 
@@ -54,7 +52,7 @@ export function normalizePath(path: string): string {
 
 export function normalizeAdapterFilterResult(
   filterResult: boolean | WideEventSamplingDecision | undefined,
-  targetName: string
+  targetName: string,
 ): WideEventSamplingDecision | undefined {
   if (filterResult === undefined) {
     return undefined;
@@ -63,7 +61,7 @@ export function normalizeAdapterFilterResult(
   if (typeof filterResult === "boolean") {
     return {
       sampled: filterResult,
-      reason: filterResult ? `${targetName}_filter_keep` : `${targetName}_filter_drop`
+      reason: filterResult ? `${targetName}_filter_keep` : `${targetName}_filter_drop`,
     };
   }
 
@@ -72,7 +70,7 @@ export function normalizeAdapterFilterResult(
 
 export function resolveIncludeExcludeDecision(
   value: string,
-  options: IncludeExcludeOptions
+  options: IncludeExcludeOptions,
 ): WideEventSamplingDecision | undefined {
   const targetName = options.targetName ?? "event";
 
@@ -82,7 +80,7 @@ export function resolveIncludeExcludeDecision(
       return {
         sampled: false,
         reason: `${targetName}_not_included`,
-        rule: `include:${options.include.map((pattern) => formatPattern(pattern)).join(",")}`
+        rule: `include:${options.include.map((pattern) => formatPattern(pattern)).join(",")}`,
       };
     }
   }
@@ -93,7 +91,7 @@ export function resolveIncludeExcludeDecision(
       return {
         sampled: false,
         reason: `${targetName}_excluded`,
-        rule: `exclude:${formatPattern(excludePattern)}`
+        rule: `exclude:${formatPattern(excludePattern)}`,
       };
     }
   }

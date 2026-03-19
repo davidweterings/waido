@@ -26,7 +26,7 @@ export class WideEventStructuredError extends Error {
 
   public constructor(init: StructuredErrorInit) {
     super(init.message, {
-      cause: init.cause
+      cause: init.cause,
     });
 
     this.name = init.name ?? "WideEventStructuredError";
@@ -53,7 +53,7 @@ export function normalizeError(error: unknown, details?: WideEventErrorDetails):
       cause: typedError.cause ? safeStringify(typedError.cause) : undefined,
       why: details?.why ?? typedError.why,
       fix: details?.fix ?? typedError.fix,
-      link: details?.link ?? typedError.link
+      link: details?.link ?? typedError.link,
     };
   }
 
@@ -63,6 +63,6 @@ export function normalizeError(error: unknown, details?: WideEventErrorDetails):
     code: details?.code,
     why: details?.why,
     fix: details?.fix,
-    link: details?.link
+    link: details?.link,
   };
 }

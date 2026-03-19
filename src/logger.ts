@@ -15,9 +15,9 @@ import type {
   WideEventPayloadPolicy,
   WideEventSampler,
   WideEventSamplingDecision,
-  WideEventTraceContext
+  WideEventTraceContext,
 } from "#src/types.js";
-import { cloneData, deepMerge } from "#src/utils.js";
+import { cloneData, deepMerge, isPlainObject } from "#src/utils.js";
 
 interface LoggerDependencies {
   sampler: WideEventSampler;
@@ -28,7 +28,7 @@ interface LoggerDependencies {
   onEnricherError?: (
     error: unknown,
     event: Omit<WideEvent, "sampled" | "sampling">,
-    enricherIndex: number
+    enricherIndex: number,
   ) => void;
   onDrainError?: (error: unknown, event: WideEvent, drainIndex: number) => void;
   trackPending?: <T>(operation: Promise<T>) => Promise<T>;
@@ -53,17 +53,18 @@ interface WideEventDraft {
   samplingDecision?: WideEventSamplingDecision;
   traceContext?: WideEventTraceContext;
   data: WideEventData;
-  error?: WideEventError;
+  errors: WideEventError[];
 }
 
 export class WideEventLogger {
   private readonly draft: WideEventDraft;
+  private readonly timers = new Map<string, Date>();
   private emittedEvent: WideEvent | undefined;
   private emittedPromise: Promise<WideEvent> | undefined;
 
   public constructor(
     private readonly dependencies: LoggerDependencies,
-    init: LoggerInit
+    init: LoggerInit,
   ) {
     this.draft = {
       id: init.id,
@@ -75,16 +76,87 @@ export class WideEventLogger {
       status: init.status,
       samplingDecision: init.samplingDecision,
       traceContext: init.traceContext,
-      data: cloneData(init.data)
+      data: cloneData(init.data),
+      errors: [],
     };
   }
 
-  public set(patch: WideEventData): this {
+  public set(key: string, value: unknown): this {
     if (this.isMutationLocked()) {
       return this;
     }
 
-    deepMerge(this.draft.data, patch);
+    this.draft.data[key] = value;
+    return this;
+  }
+
+  public setFields(patch: WideEventData): this;
+  public setFields(key: string, patch: WideEventData): this;
+  public setFields(keyOrPatch: string | WideEventData, maybePatch?: WideEventData): this {
+    if (this.isMutationLocked()) {
+      return this;
+    }
+
+    if (typeof keyOrPatch === "string") {
+      const existing = this.draft.data[keyOrPatch];
+      if (isPlainObject(existing) && maybePatch) {
+        deepMerge(existing, maybePatch);
+      } else {
+        this.draft.data[keyOrPatch] = maybePatch;
+      }
+    } else {
+      deepMerge(this.draft.data, keyOrPatch);
+    }
+
+    return this;
+  }
+
+  public increment(key: string, amount = 1): this {
+    if (this.isMutationLocked()) {
+      return this;
+    }
+
+    const current = this.draft.data[key];
+    this.draft.data[key] = (typeof current === "number" ? current : 0) + amount;
+    return this;
+  }
+
+  public append(key: string, value: unknown): this {
+    if (this.isMutationLocked()) {
+      return this;
+    }
+
+    const current = this.draft.data[key];
+    const list = Array.isArray(current) ? current : [];
+    list.push(value);
+    this.draft.data[key] = list;
+    return this;
+  }
+
+  public time(label: string): this {
+    if (this.isMutationLocked()) {
+      return this;
+    }
+
+    this.timers.set(label, this.dependencies.now());
+    return this;
+  }
+
+  public timeEnd(label: string): this {
+    if (this.isMutationLocked()) {
+      return this;
+    }
+
+    const start = this.timers.get(label);
+    if (start === undefined) {
+      return this;
+    }
+
+    this.timers.delete(label);
+    const durationMs = Math.max(0, this.dependencies.now().getTime() - start.getTime());
+    const timings = (this.draft.data.timings ?? {}) as Record<string, unknown>;
+    timings[label] = durationMs;
+    this.draft.data.timings = timings;
     return this;
   }
 
@@ -113,7 +185,7 @@ export class WideEventLogger {
 
     this.draft.traceContext = {
       ...this.draft.traceContext,
-      ...traceContext
+      ...traceContext,
     };
     return this;
   }
@@ -132,11 +204,11 @@ export class WideEventLogger {
       return this;
     }
 
-    this.draft.error = normalizeError(error, details);
+    this.draft.errors.push(normalizeError(error, details));
     this.draft.outcome = "error";
 
     if (patch !== undefined) {
-      this.set(patch);
+      this.setFields(patch);
     }
 
     return this;
@@ -150,11 +222,11 @@ export class WideEventLogger {
     return {
       ...this.draft,
       data: cloneData(this.draft.data),
-      error: this.draft.error ? { ...this.draft.error } : undefined,
+      errors: this.draft.errors.map((e) => ({ ...e })),
       traceContext: this.draft.traceContext ? { ...this.draft.traceContext } : undefined,
       samplingDecision: this.draft.samplingDecision
         ? { ...this.draft.samplingDecision }
-        : undefined
+        : undefined,
     };
   }
 
@@ -178,7 +250,7 @@ export class WideEventLogger {
 
   private async emitInternal(input: EmitWideEventInput): Promise<WideEvent> {
     if (input.data !== undefined) {
-      this.set(input.data);
+      this.setFields(input.data);
     }
 
     if (input.status !== undefined) {
@@ -195,7 +267,7 @@ export class WideEventLogger {
 
     const endedAt = this.dependencies.now();
     const durationMs = Math.max(0, endedAt.getTime() - this.draft.startedAt.getTime());
-    const outcome = this.draft.outcome ?? (this.draft.error ? "error" : "success");
+    const outcome = this.draft.outcome ?? (this.draft.errors.length > 0 ? "error" : "success");
 
     const eventWithoutSampling: Omit<WideEvent, "sampled" | "sampling"> = {
       id: this.draft.id,
@@ -214,7 +286,7 @@ export class WideEventLogger {
       tracestate: this.draft.traceContext?.tracestate,
       traceSource: this.draft.traceContext?.source,
       data: cloneData(this.draft.data),
-      error: this.draft.error
+      errors: this.draft.errors.map((e) => ({ ...e })),
     };
 
     for (let index = 0; index < this.dependencies.enrichers.length; index += 1) {
@@ -222,7 +294,7 @@ export class WideEventLogger {
 
       try {
         await enricher({
-          event: eventWithoutSampling
+          event: eventWithoutSampling,
         });
       } catch (error) {
         this.dependencies.onEnricherError?.(error, eventWithoutSampling, index);
@@ -231,22 +303,22 @@ export class WideEventLogger {
 
     const payloadResult = applyPayloadPolicy(eventWithoutSampling, this.dependencies.payloadPolicy);
     eventWithoutSampling.payload = payloadResult.payload;
-    if (payloadResult.error && !eventWithoutSampling.error) {
-      eventWithoutSampling.error = {
+    if (payloadResult.error && eventWithoutSampling.errors.length === 0) {
+      eventWithoutSampling.errors.push({
         name: payloadResult.error._tag,
-        message: payloadResult.error.message
-      };
+        message: payloadResult.error.message,
+      });
     }
 
     const samplingDecision = await this.resolveSamplingDecision(
       eventWithoutSampling,
-      payloadResult.forcedSamplingDecision
+      payloadResult.forcedSamplingDecision,
     );
 
     const event: WideEvent = {
       ...eventWithoutSampling,
       sampled: samplingDecision.sampled,
-      sampling: samplingDecision
+      sampling: samplingDecision,
     };
 
     this.emittedEvent = event;
@@ -256,7 +328,7 @@ export class WideEventLogger {
     }
 
     const drainResults = await Promise.allSettled(
-      this.dependencies.drains.map(async (drain) => drain(event))
+      this.dependencies.drains.map(async (drain) => drain(event)),
     );
 
     drainResults.forEach((result, drainIndex) => {
@@ -270,7 +342,7 @@ export class WideEventLogger {
 
   private async resolveSamplingDecision(
     event: Omit<WideEvent, "sampled" | "sampling">,
-    forcedDecision: WideEventSamplingDecision | undefined
+    forcedDecision: WideEventSamplingDecision | undefined,
   ): Promise<WideEventSamplingDecision> {
     if (forcedDecision !== undefined) {
       return forcedDecision;
@@ -287,7 +359,7 @@ export class WideEventLogger {
       return {
         sampled: false,
         reason: "sampler_error",
-        rule: error instanceof Error ? error.message : "unknown"
+        rule: error instanceof Error ? error.message : "unknown",
       };
     }
   }
@@ -296,3 +368,73 @@ export class WideEventLogger {
     return this.emittedEvent !== undefined || this.emittedPromise !== undefined;
   }
 }
+
+const noopEvent: WideEvent = {
+  id: "",
+  name: "",
+  kind: "",
+  startedAt: "",
+  endedAt: "",
+  durationMs: 0,
+  outcome: "success",
+  sampled: false,
+  sampling: { sampled: false, reason: "noop" },
+  data: {},
+  errors: [],
+};
+
+class NoopLogger extends WideEventLogger {
+  constructor() {
+    super(
+      {
+        sampler: () => ({ sampled: false, reason: "noop" }),
+        enrichers: [],
+        drains: [],
+        now: () => new Date(),
+      },
+      { id: "", name: "", startedAt: new Date() },
+    );
+  }
+
+  public override set(): this {
+    return this;
+  }
+  public override setFields(): this {
+    return this;
+  }
+  public override increment(): this {
+    return this;
+  }
+  public override append(): this {
+    return this;
+  }
+  public override time(): this {
+    return this;
+  }
+  public override timeEnd(): this {
+    return this;
+  }
+  public override setStatus(): this {
+    return this;
+  }
+  public override setOutcome(): this {
+    return this;
+  }
+  public override setTraceContext(): this {
+    return this;
+  }
+  public override setSamplingDecision(): this {
+    return this;
+  }
+  public override error(): this {
+    return this;
+  }
+  public override hasEmitted(): boolean {
+    return false;
+  }
+  public override emit(): Promise<WideEvent> {
+    return Promise.resolve(noopEvent);
+  }
+}
+
+export const noopLogger: WideEventLogger = new NoopLogger();
