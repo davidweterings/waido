@@ -1,5 +1,0 @@
----
-"waido": minor
----
-
-release improvements
