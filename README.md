@@ -191,4 +191,3 @@ See: `examples/emit-to-opentelemetry.ts`.
 
 See: `examples/sentry-exception-drain.ts`.
 The example uses an explicit Sentry tag allowlist so high-cardinality fields stay in context, not tags.
-

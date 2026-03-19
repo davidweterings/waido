@@ -1,28 +1,23 @@
 name: Publish to npm
 
 on:
-  release:
-    types:
-      - published
+  push:
+    branches:
+      - main
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
       id-token: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Verify tag matches package version
-        run: |
-          PACKAGE_VERSION="v$(node -p 'require("./package.json").version')"
-          if [ "$PACKAGE_VERSION" != "${{ github.ref_name }}" ]; then
-            echo "::error::Tag ${{ github.ref_name }} does not match package.json version $PACKAGE_VERSION"
-            exit 1
-          fi
 
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
@@ -37,14 +32,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Test
-        run: pnpm run test
-
-      - name: Build
-        run: pnpm run build
-
       - name: Setup npm CLI for Trusted Publishing
         run: npm install --global --ignore-scripts npm@11.12.0
 
-      - name: Publish
-        run: npm publish --access public --provenance
+      - name: Create Release Pull Request or Publish
+        uses: changesets/action@e87c8ed249971350e47fab7515075f44eb134e5b # v1.7.0
+        with:
+          version: pnpm publish:version
+          publish: pnpm publish:ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
