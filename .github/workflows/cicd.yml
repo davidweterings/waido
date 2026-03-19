@@ -71,13 +71,23 @@ jobs:
       - name: Upgrade npm for trusted publishing
         run: npm install --global --ignore-scripts npm@11.12.0
 
-      - name: Create Release Pull Request or Publish
-        uses: changesets/action@e87c8ed249971350e47fab7515075f44eb134e5b # v1.7.0
+      - name: Version packages and changelog
+        run: pnpm publish:version
+
+      - name: Create or update release PR
+        id: create-release-pr
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           title: "Release new version"
-          commit: "update version"
-          publish: pnpm publish:ci
-          version: pnpm publish:version
+          commit-message: "update version"
+          branch: changeset-release/main
+          base: main
+          sign-commits: true
+          delete-branch: true
+
+      - name: Publish packages
+        if: steps.create-release-pr.outputs.pull-request-operation != 'created' && steps.create-release-pr.outputs.pull-request-operation != 'updated'
+        run: pnpm publish:ci
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
