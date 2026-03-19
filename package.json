@@ -10,16 +10,16 @@
     "serverless",
     "wide-event"
   ],
+  "homepage": "https://github.com/davidweterings/waido#readme",
+  "bugs": {
+    "url": "https://github.com/davidweterings/waido/issues"
+  },
+  "license": "MIT",
+  "author": "David Weterings",
   "repository": {
     "type": "git",
     "url": "https://github.com/davidweterings/waido"
   },
-  "bugs": {
-    "url": "https://github.com/davidweterings/waido/issues"
-  },
-  "homepage": "https://github.com/davidweterings/waido#readme",
-  "license": "MIT",
-  "author": "David Weterings",
   "files": [
     "dist",
     "LICENSE",
