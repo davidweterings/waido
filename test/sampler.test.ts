@@ -22,6 +22,7 @@ describe("sampler helpers", () => {
       durationMs: 1,
       outcome: "success",
       data: {},
+      errors: [],
     });
 
     expect(typeof decision).toBe("object");
@@ -55,6 +56,7 @@ describe("sampler helpers", () => {
       durationMs: 1,
       outcome: "success",
       data: {},
+      errors: [],
     });
 
     if (typeof decision === "boolean") {
