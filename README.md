@@ -192,35 +192,3 @@ See: `examples/emit-to-opentelemetry.ts`.
 See: `examples/sentry-exception-drain.ts`.
 The example uses an explicit Sentry tag allowlist so high-cardinality fields stay in context, not tags.
 
-## Internal `#src/*` imports
-
-The package uses import maps for cleaner internal imports:
-
-```json
-{
-  "imports": {
-    "#src/*": {
-      "types": "./src/*",
-      "default": "./dist/*"
-    }
-  }
-}
-```
-
-## npm publishing pipeline
-
-- CI: `.github/workflows/ci.yml`
-- Publish: `.github/workflows/publish.yml`
-- Both workflows use hard-pinned action SHAs (managed with `pinact` and `.pinact.yaml`).
-- Publish uses npm Trusted Publishing (OIDC), no `NPM_TOKEN` secret.
-- Publish command is `npm publish --access public --provenance`.
-- Workflow upgrades npm to `^11.5.1` (required for trusted publishing).
-
-Trusted publishing setup on npm:
-
-1. On npmjs.com, open your package settings.
-2. Configure `Trusted publishing` for `GitHub Actions` with:
-   - your GitHub org/user
-   - repository name
-   - workflow filename: `publish.yml` in `.github/workflows`
-3. Keep GitHub workflow permission `id-token: write` enabled (already set).
