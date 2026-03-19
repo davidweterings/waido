@@ -191,3 +191,19 @@ See: `examples/emit-to-opentelemetry.ts`.
 
 See: `examples/sentry-exception-drain.ts`.
 The example uses an explicit Sentry tag allowlist so high-cardinality fields stay in context, not tags.
+
+## Releasing
+
+This project uses [changesets](https://github.com/changesets/changesets) for versioning and publishing.
+
+1. Add a changeset to your PR:
+
+   ```bash
+   pnpm changeset
+   ```
+
+   Select the bump type (patch/minor/major) and describe the change.
+
+2. Merge the PR into `main`. The CI will detect pending changesets and open a "Release new version" PR that bumps the version and updates the changelog.
+
+3. Merge the release PR. CI will publish the new version to npm automatically.
