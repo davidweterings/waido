@@ -1,0 +1,14 @@
+{
+  "name": "waido-examples",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opentelemetry/api": "*",
+    "@sentry/node": "*",
+    "express": "*"
+  },
+  "devDependencies": {
+    "@types/express": "*",
+    "@types/node": "*"
+  }
+}

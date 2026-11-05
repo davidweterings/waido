@@ -17,11 +17,30 @@ const app = express();
 app.use(express.json());
 app.use(
   createExpressWideEventMiddleware({
-    includePaths: ["/checkout/**"],
     excludePaths: ["/checkout/health"],
     emitTimeoutMs: 2_000,
   }),
 );
+
+app.get("/cart", async (req, res) => {
+  const log = useLogger();
+
+  log.setFields({
+    cart: {
+      id: '123'
+    },
+  });
+
+  log.setFields({
+    cart: {
+      items: req.body?.items?.length ?? 0,
+    },
+  });
+
+  res.status(200).json({
+    ok: true,
+  });
+});
 
 app.post("/checkout", async (req, res) => {
   const log = useLogger();
