@@ -63,9 +63,25 @@ function resolveUrl(endpoint: string | undefined): string {
     throw new TypeError("createOtlpDrain needs an http or https endpoint");
   }
 
+  // `fetch` refuses these URLs, and its error repeats the password.
+  if (url.username || url.password) {
+    throw new TypeError(
+      "createOtlpDrain can't use credentials in the endpoint. Use headers instead.",
+    );
+  }
+
   const path = url.pathname.replace(/\/+$/, "");
   url.pathname = path.endsWith(LOGS_PATH) ? path : `${path}${LOGS_PATH}`;
   return url.toString();
+}
+
+/** Checks headers up front, because `fetch` repeats an invalid value, likely a token, in its error. */
+function assertValidHeaders(headers: Record<string, string>): void {
+  try {
+    new Headers(headers);
+  } catch {
+    throw new TypeError("createOtlpDrain received a header with an invalid name or value");
+  }
 }
 
 /** Parses `key=value,key2=value2`, the format of `OTEL_EXPORTER_OTLP_HEADERS`. */
@@ -245,6 +261,7 @@ export function createOtlpDrain(options: OtlpDrainOptions = {}): WideEventDrain 
     ...options.headers,
     "content-type": "application/json",
   };
+  assertValidHeaders(headers);
   const fallbackService = process.env.OTEL_SERVICE_NAME || DEFAULT_SERVICE_NAME;
 
   const queue: WideEvent[] = [];

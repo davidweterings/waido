@@ -428,17 +428,16 @@ describe("createOtlpDrain", () => {
       await expect(runtime.flush()).resolves.toMatchObject({ completed: true });
     });
 
-    it("never puts credentials in reported errors", async () => {
+    it("doesn't put the token in the error when a request is refused", async () => {
       replies = [{ status: 401 }];
-      const { failures, runtime } = setup({
-        endpoint: endpoint.replace("http://", "http://user:hunter2@"),
-        headers: { authorization: "Bearer hunter2" },
-      });
+      const { failures, runtime } = setup({ headers: { authorization: "Bearer hunter2" } });
 
       await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
+      expect(failures[0].error.message).toContain("status 401");
       expect(failures[0].error.message).not.toContain("hunter2");
+      expect(failures[0].error.cause).toBeUndefined();
     });
   });
 
@@ -451,6 +450,27 @@ describe("createOtlpDrain", () => {
     it("throws at startup for an invalid endpoint", () => {
       expect(() => createOtlpDrain({ endpoint: "not a url" })).toThrow("valid URL");
       expect(() => createOtlpDrain({ endpoint: "ftp://example.com" })).toThrow("http or https");
+    });
+
+    it("rejects credentials in the endpoint, without repeating them", () => {
+      const create = () => createOtlpDrain({ endpoint: "http://user:hunter2@example.com" });
+
+      expect(create).toThrow("Use headers instead");
+      expect(create).not.toThrow("hunter2");
+    });
+
+    it("rejects an invalid header, without repeating its value", () => {
+      const create = () =>
+        createOtlpDrain({ endpoint, headers: { authorization: "Bearer hunter2\nbad" } });
+
+      expect(create).toThrow("invalid name or value");
+      expect(create).not.toThrow("hunter2");
+    });
+
+    it("rejects an invalid header from the environment too", () => {
+      vi.stubEnv("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer%20hunter2%0Abad");
+
+      expect(() => createOtlpDrain({ endpoint })).toThrow("invalid name or value");
     });
 
     it("throws at startup for invalid limits", () => {

@@ -203,14 +203,14 @@ const waido = initWaido({
       headers: { authorization: `Bearer ${process.env.BACKEND_TOKEN}` },
     }),
   ],
-  onError: (error, context) => console.error(context.stage, error),
 });
 ```
 
 - **Standard settings work.** Without options it reads `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_SERVICE_NAME`. With no endpoint at all, it throws at startup.
 - **Events are sent in batches**, when 512 are waiting or after 5 seconds. Call `flush()` or `destroy()` before your process exits, or waiting events are lost.
 - **Failed sends are retried** on 429, 502, 503, 504 and network errors, up to 5 times with backoff, honouring `Retry-After`. Other failures drop the batch.
-- **Nothing fails silently if you set `onError`.** Dropped batches, partial rejections and a full queue (2048 events by default) are all reported there.
+- **Delivery problems are reported.** Dropped batches, partial rejections and a full queue (2048 events by default) all go to `onError`, or to a warning on stderr if you haven't set one.
+- **Credentials go in `headers`.** An endpoint containing a username or password, or an invalid header, throws at startup.
 
 Events arrive as log records named `waido.wide_event`, with nested fields flattened to dotted names such as `user.id` and `http.route`. Waido's own fields use the `waido.` prefix:
 
@@ -302,7 +302,9 @@ initWaido({
 });
 ```
 
-If you don't set `drains`, events go to stdout as JSON. Pass `drains: []` to send them nowhere. Without an `onError`, telemetry failures are ignored silently, so it's worth setting one.
+If you don't set `drains`, events go to stdout as JSON. Pass `drains: []` to send them nowhere.
+
+Telemetry failures never reach your code. By default they're written to stderr, at most once a minute for each kind of failure, with a count of what was skipped. Set `onError` to handle them yourself, for example to send them to your own logger. That replaces the warning, so `onError: () => {}` silences it.
 
 A drain is just a function. If yours batches, it can add a `flush` method, which `flush()` and `destroy()` will wait for, and a `start` method to receive a `report` function for failures that happen in the background.
 

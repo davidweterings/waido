@@ -14,6 +14,7 @@ import type {
   WideEventTraceContext,
 } from "#src/types.js";
 import { createDefaultId } from "#src/utils.js";
+import { createDefaultErrorHandler } from "#src/warnings.js";
 
 const DEFAULT_FLUSH_TIMEOUT_MS = 30_000;
 
@@ -97,7 +98,7 @@ function trackDrainWork(operation: Promise<void>): void {
 }
 
 function createRuntime(config: WideEventRuntimeConfig): Runtime {
-  const { payloadPolicy, emitTimeoutMs, onError } = config;
+  const { payloadPolicy, emitTimeoutMs, onError = createDefaultErrorHandler() } = config;
 
   if (payloadPolicy?.maxBytes !== undefined) {
     if (!Number.isFinite(payloadPolicy.maxBytes) || payloadPolicy.maxBytes <= 0) {
@@ -119,7 +120,7 @@ function createRuntime(config: WideEventRuntimeConfig): Runtime {
 
   const report: Runtime["report"] = (error, context) => {
     try {
-      onError?.(error, context);
+      onError(error, context);
     } catch {
       // A failing error handler has nowhere left to report to.
     }

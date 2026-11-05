@@ -8,6 +8,7 @@ Rework waido around tail sampling, with export to any OTLP backend. This release
 
 - `createTailSampler` with `errors()`, `slowerThan()` and `traceSampled()` keep rules. Sampling is derived from the trace ID, and events record a 1-in-N `sampling.sampleRate`.
 - `createOtlpDrain` sends kept events to any OTLP/HTTP receiver, in batches and with retries, with no other packages needed.
+- Telemetry failures now warn on stderr by default, rate-limited per kind of failure. `onError` replaces this.
 - If the app uses OpenTelemetry tracing, events pick up its trace IDs and enrich the active span automatically. Turn enrichment off with `enrichSpans: false`.
 - `createExpressErrorMiddleware` from `waido/express`, so thrown errors reach the event.
 - `createRedactor` and a `redact` option.

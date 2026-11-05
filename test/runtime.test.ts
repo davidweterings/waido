@@ -724,6 +724,79 @@ describe("runtime", () => {
       expect(events[0].service).toBeUndefined();
     });
 
+    describe("without an onError", () => {
+      const failingDrain = () => {
+        throw new Error("sink down", { cause: new Error("connection refused") });
+      };
+
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+      });
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      async function emitOne(runtime: ReturnType<typeof initWaido>) {
+        await withWideEvent({ name: "job" }, () => undefined);
+        await runtime.flush();
+      }
+
+      it("warns on stderr, including the cause", async () => {
+        const warn = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const runtime = initWaido({ drains: [failingDrain] });
+
+        await emitOne(runtime);
+
+        expect(warn).toHaveBeenCalledOnce();
+        expect(warn.mock.calls[0][0]).toContain("[waido] drain: sink down: connection refused");
+        expect(warn.mock.calls[0][0]).toContain("onError");
+        warn.mockRestore();
+      });
+
+      it("warns at most once a minute per kind of failure, then counts what it skipped", async () => {
+        const warn = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const runtime = initWaido({ drains: [failingDrain] });
+
+        await emitOne(runtime);
+        await emitOne(runtime);
+        await emitOne(runtime);
+        expect(warn).toHaveBeenCalledOnce();
+
+        vi.setSystemTime(Date.now() + 60_000);
+        await emitOne(runtime);
+
+        expect(warn).toHaveBeenCalledTimes(2);
+        expect(warn.mock.calls[1][0]).toContain("2 more since last warning");
+        warn.mockRestore();
+      });
+
+      it("warns separately for each kind of failure", async () => {
+        const warn = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const runtime = initWaido({
+          drains: [failingDrain],
+          sampler: () => {
+            throw new Error("sampler failed");
+          },
+        });
+
+        await emitOne(runtime);
+
+        expect(warn).toHaveBeenCalledTimes(2);
+        warn.mockRestore();
+      });
+
+      it("stays quiet when onError is set, even to do nothing", async () => {
+        const warn = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const runtime = initWaido({ drains: [failingDrain], onError: () => undefined });
+
+        await emitOne(runtime);
+
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
+      });
+    });
+
     it("survives an onError handler that throws", async () => {
       const { runtime } = setup({
         drains: [

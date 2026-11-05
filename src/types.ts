@@ -164,7 +164,10 @@ export interface WideEventRuntimeConfig {
   emitTimeoutMs?: number;
   now?: () => Date;
   idGenerator?: () => string;
-  /** Receives telemetry failures. They never reach the code being observed. */
+  /**
+   * Receives telemetry failures, which never reach the code being observed. Replaces the default,
+   * which warns on stderr at most once a minute for each kind of failure.
+   */
   onError?: (error: unknown, context: WideEventErrorContext) => void;
 }
 

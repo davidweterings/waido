@@ -6,7 +6,6 @@ const waido = initWaido({
   service: "checkout-worker",
   sampler: createTailSampler({ keep: [errors()], rate: 0 }),
   drains: [createOtlpDrain({ endpoint: process.env.OTLP_ENDPOINT ?? "http://localhost:4318" })],
-  onError: (error, context) => console.error(`waido ${context.stage}:`, error),
 });
 
 // Sampled out, so this isn't sent.
