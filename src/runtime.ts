@@ -1,148 +1,55 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import { Result } from "better-result";
-
-import { noopLogger, WideEventLogger } from "#src/logger.js";
-import {
-  EmitWideEventTimeoutError,
-  FlushWideEventsTimeoutError,
-  type WideResult,
-} from "#src/no-throw.js";
-import { normalizeSamplingDecision } from "#src/sampler.js";
+import { createConsoleDrain } from "#src/drains.js";
+import { noopWideEvent, ActiveWideEvent } from "#src/active-event.js";
+import { DEFAULT_MAX_BYTES } from "#src/payload.js";
+import { createSpanBinder, type TraceBinding } from "#src/tracing.js";
 import type {
-  EmitWideEventInput,
   StartWideEventInput,
   WideEvent,
   WideEventDrain,
+  WideEventErrorContext,
   WideEventRuntimeConfig,
-  WideEventSamplingDecision,
+  WideEventSampler,
   WideEventTraceContext,
-  WithWideEventOptions,
 } from "#src/types.js";
 import { createDefaultId } from "#src/utils.js";
+import { createDefaultErrorHandler } from "#src/warnings.js";
 
-interface RuntimeState {
-  service?: string;
-  environment?: string;
-  filter?: WideEventRuntimeConfig["filter"];
-  sampler: NonNullable<WideEventRuntimeConfig["sampler"]>;
-  enrichers: NonNullable<WideEventRuntimeConfig["enrichers"]>;
+const DEFAULT_FLUSH_TIMEOUT_MS = 30_000;
+
+interface Runtime {
+  config: WideEventRuntimeConfig;
+  sampler: WideEventSampler;
   drains: WideEventDrain[];
-  payloadPolicy?: WideEventRuntimeConfig["payloadPolicy"];
-  traceContextExtractor?: WideEventRuntimeConfig["traceContextExtractor"];
-  emitTimeoutMs?: number;
-  now: NonNullable<WideEventRuntimeConfig["now"]>;
-  idGenerator: NonNullable<WideEventRuntimeConfig["idGenerator"]>;
-  onEnricherError?: WideEventRuntimeConfig["onEnricherError"];
-  onDrainError?: WideEventRuntimeConfig["onDrainError"];
+  now: () => Date;
+  idGenerator: () => string;
+  report: (error: unknown, context: WideEventErrorContext) => void;
+  deliver: (event: WideEvent) => void;
+  bindSpan: () => TraceBinding | undefined;
 }
 
 export interface FlushWideEventsOptions {
   timeoutMs?: number;
 }
 
+export interface FlushWideEventsResult {
+  /** `false` if the timeout passed with work still in progress. */
+  completed: boolean;
+  /** Scopes and drains still in progress when the call returned. */
+  pending: number;
+}
+
 export interface WideEventRuntimeHandle {
-  flush(options?: FlushWideEventsOptions): Promise<WideResult<void, FlushWideEventsTimeoutError>>;
-  destroy(options?: FlushWideEventsOptions): Promise<WideResult<void, FlushWideEventsTimeoutError>>;
+  flush(options?: FlushWideEventsOptions): Promise<FlushWideEventsResult>;
+  /** Flushes, then shuts the runtime down, even if the flush timed out. */
+  destroy(options?: FlushWideEventsOptions): Promise<FlushWideEventsResult>;
 }
 
-const storage = new AsyncLocalStorage<WideEventLogger>();
-const pendingOperations = new Set<Promise<unknown>>();
+const storage = new AsyncLocalStorage<ActiveWideEvent>();
+const pendingDrains = new Set<Promise<void>>();
 const activeScopes = new Map<symbol, Promise<void>>();
-let runtimeGeneration = 0;
-
-const defaultState: RuntimeState = {
-  service: undefined,
-  environment: process.env.NODE_ENV,
-  filter: undefined,
-  sampler: () => ({ sampled: true, reason: "default_keep" }),
-  enrichers: [],
-  drains: [],
-  payloadPolicy: undefined,
-  traceContextExtractor: undefined,
-  emitTimeoutMs: undefined,
-  now: () => new Date(),
-  idGenerator: createDefaultId,
-  onEnricherError: undefined,
-  onDrainError: undefined,
-};
-
-let state: RuntimeState = {
-  ...defaultState,
-};
-
-function resetRuntimeState(): void {
-  state = {
-    ...defaultState,
-  };
-}
-
-function combineSamplingDecisions(
-  ...decisions: Array<WideEventSamplingDecision | undefined>
-): WideEventSamplingDecision | undefined {
-  let lastKeepDecision: WideEventSamplingDecision | undefined;
-
-  for (const decision of decisions) {
-    if (decision === undefined) {
-      continue;
-    }
-
-    if (!decision.sampled) {
-      return decision;
-    }
-
-    lastKeepDecision = decision;
-  }
-
-  return lastKeepDecision;
-}
-
-function normalizeFilterDecision(
-  result: ReturnType<NonNullable<WideEventRuntimeConfig["filter"]>>,
-): WideEventSamplingDecision {
-  if (typeof result === "boolean") {
-    return {
-      sampled: result,
-      reason: result ? "filter_keep" : "filtered_out",
-    };
-  }
-
-  return normalizeSamplingDecision(result);
-}
-
-function mergeTraceContexts(
-  extracted: WideEventTraceContext | undefined,
-  input: WideEventTraceContext | undefined,
-): WideEventTraceContext | undefined {
-  const merged = {
-    ...extracted,
-    ...input,
-  };
-
-  if (
-    merged.traceId === undefined &&
-    merged.spanId === undefined &&
-    merged.traceparent === undefined &&
-    merged.tracestate === undefined &&
-    merged.source === undefined
-  ) {
-    return undefined;
-  }
-
-  return merged;
-}
-
-function trackPending<T>(operation: Promise<T>): Promise<T> {
-  const tracked = operation.finally(() => {
-    pendingOperations.delete(tracked);
-  });
-
-  pendingOperations.add(tracked);
-  void tracked.catch(() => {
-    // Keep unawaited emit failures from surfacing as unhandled promise rejections.
-  });
-  return tracked;
-}
+let runtime: Runtime | undefined;
 
 function startTimer(timeoutMs: number, onTimeout: () => void): ReturnType<typeof setTimeout> {
   const timer = setTimeout(onTimeout, timeoutMs);
@@ -150,149 +57,203 @@ function startTimer(timeoutMs: number, onTimeout: () => void): ReturnType<typeof
   return timer;
 }
 
-function createTrackedScopeSummary(): {
-  activeScopeCount: number;
-  pendingOperationCount: number;
-  trackedOperations: Promise<unknown>[];
-} {
-  return {
-    activeScopeCount: activeScopes.size,
-    pendingOperationCount: pendingOperations.size,
-    trackedOperations: [...activeScopes.values(), ...pendingOperations],
-  };
-}
+function runDrain(
+  drain: WideEventDrain,
+  event: WideEvent,
+  index: number,
+  timeoutMs: number | undefined,
+  report: Runtime["report"],
+): Promise<void> {
+  const context = { eventId: event.id, eventName: event.name, index };
 
-function formatTrackedScopeSummary(
-  activeScopeCount: number,
-  pendingOperationCount: number,
-): string {
-  const parts: string[] = [];
+  return new Promise<void>((resolve) => {
+    const timer =
+      timeoutMs === undefined
+        ? undefined
+        : startTimer(timeoutMs, () => {
+            report(new Error(`Drain ${index} did not finish within ${timeoutMs}ms`), {
+              ...context,
+              stage: "drain_timeout",
+            });
+            resolve();
+          });
 
-  if (activeScopeCount > 0) {
-    parts.push(`${activeScopeCount} active wide event scope(s)`);
-  }
-
-  if (pendingOperationCount > 0) {
-    parts.push(`${pendingOperationCount} pending wide event operation(s)`);
-  }
-
-  return parts.join(" and ") || "wide event work";
-}
-
-function createFlushTimeoutError(timeoutMs: number): FlushWideEventsTimeoutError {
-  const { activeScopeCount, pendingOperationCount } = createTrackedScopeSummary();
-  return new FlushWideEventsTimeoutError({
-    timeoutMs,
-    activeScopes: activeScopeCount,
-    pendingOperations: pendingOperationCount,
-    message: `Timed out waiting for ${formatTrackedScopeSummary(activeScopeCount, pendingOperationCount)} to flush`,
+    Promise.resolve()
+      .then(() => drain(event))
+      .catch((error: unknown) => {
+        report(error, { ...context, stage: "drain" });
+      })
+      .finally(() => {
+        clearTimeout(timer);
+        resolve();
+      });
   });
 }
 
-async function waitForOperationWithTimeout<T>(
-  operation: Promise<T>,
-  timeoutMs: number,
-  createTimeoutError: () => Error,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  try {
-    return await Promise.race([
-      operation,
-      new Promise<T>((_, reject) => {
-        timer = startTimer(timeoutMs, () => reject(createTimeoutError()));
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) {
-      clearTimeout(timer);
-    }
-  }
+function trackDrainWork(operation: Promise<void>): void {
+  const tracked = operation.finally(() => {
+    pendingDrains.delete(tracked);
+  });
+  pendingDrains.add(tracked);
 }
 
-function createLogger(input: StartWideEventInput): WideEventLogger {
-  const filterDecision = state.filter
-    ? Result.try(() => normalizeFilterDecision(state.filter!(input))).match({
-        ok: (value) => value,
-        err: (error) => ({
-          sampled: false,
-          reason: "filter_error",
-          rule: error.message,
-        }),
-      })
-    : undefined;
+function createRuntime(config: WideEventRuntimeConfig): Runtime {
+  const { payloadPolicy, emitTimeoutMs, onError = createDefaultErrorHandler() } = config;
 
-  const samplingDecision = combineSamplingDecisions(input.samplingDecision, filterDecision);
+  if (payloadPolicy?.maxBytes !== undefined) {
+    if (!Number.isFinite(payloadPolicy.maxBytes) || payloadPolicy.maxBytes <= 0) {
+      throw new RangeError(
+        `payloadPolicy.maxBytes must be a positive number. Received: ${payloadPolicy.maxBytes}`,
+      );
+    }
+  }
 
-  const extractedTraceContext = state.traceContextExtractor
-    ? Result.try(() => state.traceContextExtractor!(input)).match({
-        ok: (value) => value,
-        err: () => undefined,
-      })
-    : undefined;
+  if (emitTimeoutMs !== undefined && (!Number.isFinite(emitTimeoutMs) || emitTimeoutMs <= 0)) {
+    throw new RangeError(`emitTimeoutMs must be a positive number. Received: ${emitTimeoutMs}`);
+  }
 
-  const traceContext = mergeTraceContexts(extractedTraceContext, input.traceContext);
+  const drains = config.drains ?? [createConsoleDrain()];
 
-  return new WideEventLogger(
-    {
-      sampler: state.sampler,
-      enrichers: [...state.enrichers],
-      drains: [...state.drains],
-      payloadPolicy: state.payloadPolicy,
-      now: state.now,
-      onEnricherError: state.onEnricherError,
-      onDrainError: state.onDrainError,
-      trackPending,
+  if (drains.some((drain) => typeof drain !== "function")) {
+    throw new TypeError("Every drain must be a function");
+  }
+
+  const report: Runtime["report"] = (error, context) => {
+    try {
+      onError(error, context);
+    } catch {
+      // A failing error handler has nowhere left to report to.
+    }
+  };
+
+  drains.forEach((drain, index) => {
+    drain.start?.({
+      report: (error) => {
+        report(error, { stage: "drain", index });
+      },
+    });
+  });
+
+  return {
+    config: {
+      ...config,
+      environment: config.environment ?? process.env.NODE_ENV,
+      payloadPolicy: { maxBytes: DEFAULT_MAX_BYTES, ...payloadPolicy },
     },
-    {
-      ...input,
-      traceContext,
-      samplingDecision,
-      id: state.idGenerator(),
-      startedAt: state.now(),
-      service: state.service,
-      environment: state.environment,
+    sampler: config.sampler ?? (() => ({ sampled: true, reason: "default_keep" })),
+    drains,
+    now: config.now ?? (() => new Date()),
+    idGenerator: config.idGenerator ?? createDefaultId,
+    report,
+    deliver: (event) => {
+      drains.forEach((drain, index) => {
+        trackDrainWork(runDrain(drain, event, index, emitTimeoutMs, report));
+      });
     },
+    bindSpan: createSpanBinder({ enrichSpans: config.enrichSpans ?? true }),
+  };
+}
+
+function definedFields(context: WideEventTraceContext | undefined): WideEventTraceContext {
+  return Object.fromEntries(
+    Object.entries(context ?? {}).filter(([, value]) => value !== undefined),
   );
 }
 
-export function initWaido(config: WideEventRuntimeConfig = {}): WideEventRuntimeHandle {
-  const generation = ++runtimeGeneration;
-  const nextDrains =
-    config.drains !== undefined
-      ? [...config.drains]
-      : config.emitters !== undefined
-        ? [...config.emitters]
-        : [...state.drains];
+/**
+ * Merges trace context from least to most authoritative. A layer naming a different trace replaces
+ * what came before, since those span IDs would belong to the wrong trace.
+ */
+function mergeTraceContexts(
+  ...layers: Array<WideEventTraceContext | undefined>
+): WideEventTraceContext | undefined {
+  let merged: WideEventTraceContext = {};
 
-  state = {
-    ...state,
-    service: config.service ?? state.service,
-    environment: config.environment ?? state.environment,
-    filter: config.filter ?? state.filter,
-    sampler: config.sampler ?? state.sampler,
-    enrichers: config.enrichers ? [...config.enrichers] : [...state.enrichers],
-    drains: nextDrains,
-    payloadPolicy: config.payloadPolicy ?? state.payloadPolicy,
-    traceContextExtractor: config.traceContextExtractor ?? state.traceContextExtractor,
-    emitTimeoutMs: config.emitTimeoutMs ?? state.emitTimeoutMs,
-    now: config.now ?? state.now,
-    idGenerator: config.idGenerator ?? state.idGenerator,
-    onEnricherError: config.onEnricherError ?? state.onEnricherError,
-    onDrainError: config.onDrainError ?? config.onEmitterError ?? state.onDrainError,
+  for (const layer of layers) {
+    const fields = definedFields(layer);
+    const conflicts =
+      fields.traceId !== undefined &&
+      merged.traceId !== undefined &&
+      fields.traceId !== merged.traceId;
+    merged = conflicts ? fields : { ...merged, ...fields };
+  }
+
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function inheritTraceContext(parent: ActiveWideEvent | undefined): WideEventTraceContext {
+  const trace = parent?.getTraceContext();
+
+  return {
+    traceId: trace?.traceId,
+    traceSampled: trace?.traceSampled,
+    parentSpanId: trace?.spanId ?? trace?.parentSpanId,
   };
+}
+
+function isFilteredOut(current: Runtime, input: StartWideEventInput): boolean {
+  try {
+    return current.config.filter?.(input) === false;
+  } catch (error) {
+    current.report(error, { stage: "filter", eventName: input.name });
+    return false;
+  }
+}
+
+function bindToSpan(current: Runtime, input: StartWideEventInput): TraceBinding | undefined {
+  try {
+    return current.bindSpan();
+  } catch (error) {
+    current.report(error, { stage: "tracing", eventName: input.name });
+    return undefined;
+  }
+}
+
+/** Sends anything a drain is still holding, such as a partly filled batch. */
+function flushDrains(current: Runtime): void {
+  current.drains.forEach((drain, index) => {
+    if (drain.flush === undefined) {
+      return;
+    }
+
+    trackDrainWork(
+      Promise.resolve()
+        .then(() => drain.flush?.())
+        .catch((error: unknown) => {
+          current.report(error, { stage: "drain", index });
+        }),
+    );
+  });
+}
+
+function extractTraceContext(
+  current: Runtime,
+  input: StartWideEventInput,
+): WideEventTraceContext | undefined {
+  try {
+    return current.config.traceContextExtractor?.(input);
+  } catch (error) {
+    current.report(error, { stage: "trace_context", eventName: input.name });
+    return undefined;
+  }
+}
+
+/** Sets up a runtime for this process, replacing any previous configuration. */
+export function initWaido(config: WideEventRuntimeConfig = {}): WideEventRuntimeHandle {
+  const created = createRuntime(config);
+  const previous = runtime;
+  runtime = created;
+
+  if (previous !== undefined) {
+    flushDrains(previous);
+  }
 
   return {
     flush: (options) => flushWideEvents(options),
     destroy: async (options) => {
       const result = await flushWideEvents(options);
-      if (result.isErr()) {
-        return result;
-      }
-
-      if (generation === runtimeGeneration) {
-        runtimeGeneration += 1;
-        resetRuntimeState();
+      if (runtime === created) {
+        runtime = undefined;
       }
 
       return result;
@@ -300,196 +261,158 @@ export function initWaido(config: WideEventRuntimeConfig = {}): WideEventRuntime
   };
 }
 
-export function setWideEventDrains(drains: WideEventDrain[]): void {
-  state.drains = [...drains];
+/**
+ * Starts an event without putting it in context, for building custom adapters. Returns a no-op
+ * event when the runtime isn't initialized or the `filter` rejects the input.
+ */
+export function createWideEvent(input: StartWideEventInput): ActiveWideEvent {
+  const current = runtime;
+  if (current === undefined || isFilteredOut(current, input)) {
+    return noopWideEvent;
+  }
+
+  const store = storage.getStore();
+  const parent = store === noopWideEvent ? undefined : store;
+  const traceBinding = bindToSpan(current, input);
+
+  return new ActiveWideEvent(
+    {
+      sampler: current.sampler,
+      enrichers: current.config.enrichers ?? [],
+      redact: current.config.redact,
+      payloadPolicy: current.config.payloadPolicy,
+      now: current.now,
+      traceBinding,
+      deliver: current.deliver,
+      report: current.report,
+    },
+    {
+      ...input,
+      traceContext: mergeTraceContexts(
+        inheritTraceContext(parent),
+        input.traceContext,
+        extractTraceContext(current, input),
+        traceBinding?.traceContext,
+      ),
+      id: current.idGenerator(),
+      parentId: parent?.id,
+      startedAt: current.now(),
+      service: current.config.service,
+      environment: current.config.environment,
+    },
+  );
 }
 
-export function addWideEventDrain(drain: WideEventDrain): void {
-  state.drains = [...state.drains, drain];
+export function runWithWideEvent<T>(event: ActiveWideEvent, work: () => T): T {
+  return storage.run(event, work);
 }
 
-export function setWideEventEmitters(emitters: WideEventDrain[]): void {
-  setWideEventDrains(emitters);
+export function useWideEvent(): ActiveWideEvent {
+  return storage.getStore() ?? noopWideEvent;
 }
 
-export function addWideEventEmitter(emitter: WideEventDrain): void {
-  addWideEventDrain(emitter);
+/** Reports a failure from an adapter's user-supplied callback to `onError`. */
+export function reportAdapterError(error: unknown): void {
+  runtime?.report(error, { stage: "adapter" });
 }
 
-export function setWideEventEnrichers(
-  enrichers: NonNullable<WideEventRuntimeConfig["enrichers"]>,
-): void {
-  state.enrichers = [...enrichers];
-}
-
-export function addWideEventEnricher(
-  enricher: NonNullable<WideEventRuntimeConfig["enrichers"]>[number],
-): void {
-  state.enrichers = [...state.enrichers, enricher];
-}
-
-export function createWideEventLogger(input: StartWideEventInput): WideEventLogger {
-  return createLogger(input);
-}
-
-export function runWithLoggerContext<T>(logger: WideEventLogger, work: () => T): T {
-  return storage.run(logger, work);
-}
-
-export function useLogger(): WideEventLogger {
-  return storage.getStore() ?? noopLogger;
-}
-
+/** Makes `flush()` wait for a unit of work. Call the returned function when it ends. */
 export function startWideEventScope(): () => void {
   const token = Symbol("wide-event-scope");
-  let closed = false;
   let resolve!: () => void;
 
-  const trackedScope = new Promise<void>((done) => {
-    resolve = done;
-  });
-
-  activeScopes.set(token, trackedScope);
+  activeScopes.set(
+    token,
+    new Promise<void>((done) => {
+      resolve = done;
+    }),
+  );
 
   return () => {
-    if (closed) {
-      return;
+    if (activeScopes.delete(token)) {
+      resolve();
     }
-
-    closed = true;
-    activeScopes.delete(token);
-    resolve();
   };
 }
 
-export async function awaitWideEventEmit(
-  logger: WideEventLogger,
-  input: EmitWideEventInput = {},
-  options: { timeoutMs?: number } = {},
-): Promise<WideEvent> {
-  const operation = logger.emit(input);
-  const timeoutMs = options.timeoutMs ?? state.emitTimeoutMs;
-
-  if (timeoutMs === undefined) {
-    return operation;
-  }
-
-  return waitForOperationWithTimeout(operation, timeoutMs, () => {
-    const draft = logger.toDraft();
-
-    return new EmitWideEventTimeoutError({
-      timeoutMs,
-      eventId: draft.id,
-      eventName: draft.name,
-      message: `Timed out waiting ${timeoutMs}ms for wide event "${draft.name}" to emit`,
-    });
-  });
-}
-
-export async function withWideContext<T>(
+/**
+ * Runs `work` with a wide event in context, then emits the event. Returns or rethrows exactly what
+ * `work` does: a telemetry failure can't change the result.
+ */
+export async function withWideEvent<T>(
   input: StartWideEventInput,
-  work: (logger: WideEventLogger) => Promise<T> | T,
-  options: WithWideEventOptions = {},
-): Promise<WideResult<T, unknown>> {
-  const logger = createLogger(input);
+  work: (event: ActiveWideEvent) => Promise<T> | T,
+): Promise<T> {
+  const event = createWideEvent(input);
   const closeScope = startWideEventScope();
-  const autoEmit = options.autoEmit ?? true;
-  const emitOnError = options.emitOnError ?? true;
-  const successOutcome = options.successOutcome ?? "success";
 
-  return storage.run(logger, async () => {
+  return storage.run(event, async () => {
     try {
-      const workResult = await Result.tryPromise({
-        try: () => Promise.resolve(work(logger)),
-        catch: (cause) => cause,
-      });
-
-      if (workResult.isOk()) {
-        if (autoEmit && !logger.hasEmitted()) {
-          const emitResult = await Result.tryPromise({
-            try: () =>
-              awaitWideEventEmit(
-                logger,
-                {
-                  outcome: successOutcome,
-                },
-                {
-                  timeoutMs: options.emitTimeoutMs,
-                },
-              ),
-            catch: (cause) => cause,
-          });
-
-          if (emitResult.isErr()) {
-            return Result.err(emitResult.error);
-          }
-        }
-
-        return Result.ok(workResult.value);
+      const value = await work(event);
+      event.emit();
+      return value;
+    } catch (error) {
+      if (!event.hasEmitted()) {
+        event.addError(error);
+        event.emit();
       }
 
-      if (!logger.hasEmitted()) {
-        logger.error(workResult.error);
-      }
-
-      if (emitOnError && !logger.hasEmitted()) {
-        await Result.tryPromise({
-          try: () =>
-            awaitWideEventEmit(
-              logger,
-              {
-                outcome: "error",
-              },
-              {
-                timeoutMs: options.emitTimeoutMs,
-              },
-            ),
-          catch: () => undefined,
-        });
-      }
-
-      return Result.err(workResult.error);
+      throw error;
     } finally {
       closeScope();
     }
   });
 }
 
-export async function flushWideEvents(
-  options: FlushWideEventsOptions = {},
-): Promise<WideResult<void, FlushWideEventsTimeoutError>> {
-  const timeoutMs = options.timeoutMs ?? 30_000;
-  const deadline = Date.now() + timeoutMs;
+function pendingWork(): Promise<unknown>[] {
+  return [...activeScopes.values(), ...pendingDrains];
+}
 
-  while (activeScopes.size > 0 || pendingOperations.size > 0) {
+async function waitForPendingWork(deadline: number): Promise<void> {
+  while (activeScopes.size > 0 || pendingDrains.size > 0) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      return Result.err(createFlushTimeoutError(timeoutMs));
+      break;
     }
 
-    let timer: ReturnType<typeof setTimeout>;
-    const { trackedOperations } = createTrackedScopeSummary();
-    const timedOut = await Promise.race([
-      Promise.allSettled(trackedOperations).then(() => {
-        clearTimeout(timer);
-        return false as const;
-      }),
-      new Promise<true>((resolve) => {
-        timer = startTimer(remainingMs, () => resolve(true));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled(pendingWork()),
+      // This timer stays referenced: if only stuck work remains, the process has to stay alive long
+      // enough for the flush to report it, rather than exiting from under the caller.
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, remainingMs);
       }),
     ]);
+    clearTimeout(timer);
+  }
+}
 
-    if (timedOut) {
-      return Result.err(createFlushTimeoutError(timeoutMs));
-    }
+/**
+ * Waits for in-flight scopes and drains, including anything drains are batching. Never rejects:
+ * check `completed` to see whether everything finished in time.
+ */
+export async function flushWideEvents(
+  options: FlushWideEventsOptions = {},
+): Promise<FlushWideEventsResult> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  await waitForPendingWork(deadline);
+
+  // Finished work has now reached the drains, so whatever they are holding can be sent.
+  if (runtime !== undefined) {
+    flushDrains(runtime);
   }
 
-  return Result.ok();
+  await waitForPendingWork(deadline);
+
+  const pending = activeScopes.size + pendingDrains.size;
+  return { completed: pending === 0, pending };
 }
 
 export function __resetWideEventsForTests(): void {
-  runtimeGeneration = 0;
-  resetRuntimeState();
+  runtime = undefined;
   activeScopes.clear();
-  pendingOperations.clear();
+  pendingDrains.clear();
 }

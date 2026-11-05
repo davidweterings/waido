@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "paths": {
+      "#src/*": ["../src/*"],
+      "waido": ["../src/index.ts"],
+      "waido/express": ["../src/adapters/express.ts"]
+    }
+  },
+  "include": ["./**/*.ts"]
+}

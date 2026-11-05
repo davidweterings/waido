@@ -1,66 +1,62 @@
 export {
-  __resetWideEventsForTests,
-  addWideEventDrain,
-  addWideEventEnricher,
-  addWideEventEmitter,
-  createWideEventLogger,
+  createWideEvent,
   flushWideEvents,
   initWaido,
-  runWithLoggerContext,
-  setWideEventDrains,
-  setWideEventEnrichers,
-  setWideEventEmitters,
-  useLogger,
-  withWideContext,
+  runWithWideEvent,
+  useWideEvent,
+  withWideEvent,
 } from "#src/runtime.js";
-export { WideEventLogger } from "#src/logger.js";
-export { createConsoleEmitter } from "#src/emitters.js";
+export { ActiveWideEvent } from "#src/active-event.js";
+export { createConsoleDrain } from "#src/drains.js";
+export { createOtlpDrain } from "#src/otlp.js";
 export {
-  composeSamplers,
   createNameRateSampler,
-  createNameRateSamplerResult,
   createRateSampler,
-  createRateSamplerResult,
+  createTailSampler,
+  errors,
+  slowerThan,
+  traceSampled,
 } from "#src/sampler.js";
-export { resolveIncludeExcludeDecision } from "#src/filters.js";
+export { createRedactor } from "#src/redact.js";
 export { createStructuredError, WideEventStructuredError } from "#src/error.js";
 export { extractTraceContextFromHeaders, parseTraceparent } from "#src/trace.js";
-export {
-  EmitWideEventTimeoutError,
-  FlushWideEventsTimeoutError,
-  InvalidPayloadPolicyError,
-  InvalidSamplerRateError,
-} from "#src/no-throw.js";
-export { createExpressWideEventMiddleware } from "#src/adapters/express.js";
-export { Result, TaggedError } from "better-result";
 export type {
-  MaybePromise,
   EmitWideEventInput,
-  WideEventEnrichContext,
-  WideEventEnricher,
-  WideEventFilter,
-  WideEventFilterResult,
   StartWideEventInput,
   WideEvent,
+  WideEventCandidate,
   WideEventData,
+  WideEventDraft,
   WideEventDrain,
-  WideEventEmitter,
-  WideEventErrorDetails,
+  WideEventDrainContext,
+  WideEventEnrichContext,
+  WideEventEnricher,
   WideEventError,
+  WideEventErrorContext,
+  WideEventErrorDetails,
+  WideEventErrorStage,
+  WideEventFilter,
+  WideEventKeepRule,
   WideEventKind,
   WideEventOutcome,
   WideEventPayloadInfo,
   WideEventPayloadPolicy,
+  WideEventRedactor,
   WideEventRuntimeConfig,
-  WideEventSamplerResult,
-  WideEventSamplingDecision,
   WideEventSampler,
+  WideEventSamplerResult,
+  WideEventSampling,
+  WideEventSamplingDecision,
   WideEventTraceContext,
   WideEventTraceContextExtractor,
-  WithWideEventOptions,
 } from "#src/types.js";
-export type { EventFilterPattern } from "#src/filters.js";
-export type { FlushWideEventsOptions, WideEventRuntimeHandle } from "#src/runtime.js";
-export type { ExpressWideEventOptions } from "#src/adapters/express.js";
-export type { WideResult } from "#src/no-throw.js";
-export type { Result as BetterResultType } from "better-result";
+export type { StructuredErrorInit } from "#src/error.js";
+export type { ConsoleDrainOptions } from "#src/drains.js";
+export type { OtlpDrainOptions } from "#src/otlp.js";
+export type { RedactorOptions } from "#src/redact.js";
+export type { TailSamplerOptions } from "#src/sampler.js";
+export type {
+  FlushWideEventsOptions,
+  FlushWideEventsResult,
+  WideEventRuntimeHandle,
+} from "#src/runtime.js";
