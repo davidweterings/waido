@@ -1,166 +1,88 @@
-import { InvalidPayloadPolicyError } from "#src/no-throw.js";
 import type {
-  WideEvent,
+  WideEventData,
+  WideEventDraft,
   WideEventPayloadInfo,
   WideEventPayloadPolicy,
-  WideEventSamplingDecision,
 } from "#src/types.js";
-import { cloneData } from "#src/utils.js";
+import { isPlainObject } from "#src/utils.js";
 
-type WideEventCandidate = Omit<WideEvent, "sampled" | "sampling">;
+export const DEFAULT_MAX_BYTES = 64 * 1024;
+
+/** Room left for `sampling` and `payload`, which are added after the limit is applied. */
+const RESERVED_BYTES = 256;
+
+interface Leaf {
+  parent: Record<string, unknown>;
+  key: string;
+  size: number;
+}
 
 function getJsonSizeBytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value), "utf8");
+  return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
 }
 
-function createTruncatedDataMarker(dataKeys: string[]): Record<string, unknown> {
-  return {
-    __truncated: true,
-    __keys: dataKeys.slice(0, 25),
-  };
-}
-
-function truncateEventDataToFit(
-  event: WideEventCandidate,
-  maxBytes: number,
-  placeholder: string,
-): number {
-  const data = cloneData(event.data);
-  const sizedKeys = Object.keys(data)
-    .map((key) => ({
-      key,
-      size: getJsonSizeBytes(data[key]),
-    }))
-    .sort((left, right) => right.size - left.size);
-
-  for (const { key } of sizedKeys) {
-    event.data = data;
-
-    const size = getJsonSizeBytes(event);
-    if (size <= maxBytes) {
-      return size;
+function collectLeaves(data: Record<string, unknown>, leaves: Leaf[]): void {
+  for (const [key, value] of Object.entries(data)) {
+    if (isPlainObject(value)) {
+      collectLeaves(value, leaves);
+      continue;
     }
 
-    data[key] = placeholder;
+    leaves.push({ parent: data, key, size: getJsonSizeBytes(value) });
   }
-
-  event.data = createTruncatedDataMarker(Object.keys(data));
-  const markerSize = getJsonSizeBytes(event);
-  if (markerSize <= maxBytes) {
-    return markerSize;
-  }
-
-  event.data = {
-    __truncated: true,
-  };
-
-  return getJsonSizeBytes(event);
 }
 
-export interface PayloadPolicyResult {
-  payload: WideEventPayloadInfo;
-  forcedSamplingDecision?: WideEventSamplingDecision;
-  error?: InvalidPayloadPolicyError;
+/** Replaces the largest values first, so small fields such as `http.route` survive. */
+function truncateData(data: WideEventData, overBy: number, placeholder: string): void {
+  const placeholderSize = getJsonSizeBytes(placeholder);
+  const leaves: Leaf[] = [];
+  collectLeaves(data, leaves);
+  leaves.sort((left, right) => right.size - left.size);
+
+  let remaining = overBy;
+  for (const leaf of leaves) {
+    if (remaining <= 0 || leaf.size <= placeholderSize) {
+      return;
+    }
+
+    leaf.parent[leaf.key] = placeholder;
+    remaining -= leaf.size - placeholderSize;
+  }
 }
 
-function createDropDecision(reason: string, rule: string): WideEventSamplingDecision {
-  return {
-    sampled: false,
-    reason,
-    rule,
-  };
+/** Last resort for events made huge by their errors: the newest errors lose detail first. */
+function shrinkErrors(event: WideEventDraft, budget: number): void {
+  for (const field of ["stack", "cause"] as const) {
+    for (let index = event.errors.length - 1; index >= 0; index -= 1) {
+      if (getJsonSizeBytes(event) <= budget) {
+        return;
+      }
+
+      delete event.errors[index][field];
+    }
+  }
 }
 
 export function applyPayloadPolicy(
-  event: WideEventCandidate,
+  event: WideEventDraft,
   policy: WideEventPayloadPolicy | undefined,
-): PayloadPolicyResult {
+): WideEventPayloadInfo {
+  const maxBytes = policy?.maxBytes ?? DEFAULT_MAX_BYTES;
+  const budget = Math.max(0, maxBytes - RESERVED_BYTES);
   const initialSize = getJsonSizeBytes(event);
 
-  if (!policy) {
-    return {
-      payload: {
-        sizeBytes: initialSize,
-        limited: false,
-      },
-    };
+  if (initialSize <= budget) {
+    return { sizeBytes: initialSize, truncated: false, maxBytes };
   }
 
-  if (!Number.isFinite(policy.maxBytes) || policy.maxBytes <= 0) {
-    const error = new InvalidPayloadPolicyError({
-      maxBytes: policy.maxBytes,
-      message: `payloadPolicy.maxBytes must be a positive number. Received: ${policy.maxBytes}`,
-    });
+  const placeholder = policy?.truncatePlaceholder ?? "[Truncated]";
+  truncateData(event.data, initialSize - budget, placeholder);
 
-    return {
-      payload: {
-        sizeBytes: initialSize,
-        limited: true,
-        maxBytes: policy.maxBytes,
-        strategy: "drop",
-      },
-      forcedSamplingDecision: createDropDecision(
-        "invalid_payload_policy",
-        `maxBytes:${policy.maxBytes}`,
-      ),
-      error,
-    };
+  if (getJsonSizeBytes(event) > budget) {
+    event.data = { __truncated: true };
   }
 
-  if (initialSize <= policy.maxBytes) {
-    return {
-      payload: {
-        sizeBytes: initialSize,
-        limited: false,
-        maxBytes: policy.maxBytes,
-      },
-    };
-  }
+  shrinkErrors(event, budget);
 
-  const strategy = policy.overflowStrategy ?? "truncate";
-
-  if (strategy === "drop") {
-    return {
-      payload: {
-        sizeBytes: initialSize,
-        limited: true,
-        maxBytes: policy.maxBytes,
-        strategy,
-      },
-      forcedSamplingDecision: createDropDecision("payload_dropped", `maxBytes:${policy.maxBytes}`),
-    };
-  }
-
-  if (strategy === "error") {
-    const error = new InvalidPayloadPolicyError({
-      maxBytes: policy.maxBytes,
-      message: `Wide event payload exceeded maxBytes (${initialSize} > ${policy.maxBytes}) with overflowStrategy=error`,
-    });
-
-    return {
-      payload: {
-        sizeBytes: initialSize,
-        limited: true,
-        maxBytes: policy.maxBytes,
-        strategy,
-      },
-      forcedSamplingDecision: createDropDecision(
-        "payload_policy_error",
-        `maxBytes:${policy.maxBytes};strategy:error`,
-      ),
-      error,
-    };
-  }
-
-  const placeholder = policy.truncatePlaceholder ?? "[Truncated]";
-  const finalSize = truncateEventDataToFit(event, policy.maxBytes, placeholder);
-
-  return {
-    payload: {
-      sizeBytes: finalSize,
-      limited: true,
-      maxBytes: policy.maxBytes,
-      strategy,
-    },
-  };
+  return { sizeBytes: getJsonSizeBytes(event), truncated: true, maxBytes };
 }

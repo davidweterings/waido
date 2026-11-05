@@ -1,9 +1,11 @@
 import type { WideEventError, WideEventErrorDetails } from "#src/types.js";
 import { safeStringify } from "#src/utils.js";
 
+const MAX_TEXT_LENGTH = 4096;
+const TRUNCATED_SUFFIX = "…[truncated]";
+
 interface ErrorWithCode extends Error {
-  code?: string | number;
-  cause?: unknown;
+  code?: unknown;
   why?: string;
   fix?: string;
   link?: string;
@@ -41,16 +43,30 @@ export function createStructuredError(init: StructuredErrorInit): WideEventStruc
   return new WideEventStructuredError(init);
 }
 
+function capText(value: string): string {
+  return value.length <= MAX_TEXT_LENGTH
+    ? value
+    : value.slice(0, MAX_TEXT_LENGTH - TRUNCATED_SUFFIX.length) + TRUNCATED_SUFFIX;
+}
+
+function normalizeCode(code: unknown): string | number | undefined {
+  if (code === undefined || code === null) {
+    return undefined;
+  }
+
+  return typeof code === "string" || typeof code === "number" ? code : safeStringify(code);
+}
+
 export function normalizeError(error: unknown, details?: WideEventErrorDetails): WideEventError {
   if (error instanceof Error) {
     const typedError = error as ErrorWithCode;
 
     return {
       name: typedError.name,
-      message: typedError.message,
-      stack: typedError.stack,
-      code: details?.code ?? typedError.code,
-      cause: typedError.cause ? safeStringify(typedError.cause) : undefined,
+      message: capText(typedError.message),
+      stack: typedError.stack === undefined ? undefined : capText(typedError.stack),
+      code: details?.code ?? normalizeCode(typedError.code),
+      cause: typedError.cause ? capText(safeStringify(typedError.cause)) : undefined,
       why: details?.why ?? typedError.why,
       fix: details?.fix ?? typedError.fix,
       link: details?.link ?? typedError.link,
@@ -59,7 +75,7 @@ export function normalizeError(error: unknown, details?: WideEventErrorDetails):
 
   return {
     name: "NonErrorThrown",
-    message: safeStringify(error),
+    message: capText(safeStringify(error)),
     code: details?.code,
     why: details?.why,
     fix: details?.fix,

@@ -1,11 +1,12 @@
-import type { WideEventEmitter } from "#src/types.js";
+import type { WideEventDrain } from "#src/types.js";
 
-export interface ConsoleEmitterOptions {
+export interface ConsoleDrainOptions {
   pretty?: boolean;
   writer?: (payload: string) => void;
 }
 
-export function createConsoleEmitter(options: ConsoleEmitterOptions = {}): WideEventEmitter {
+/** Writes each event as one JSON line: a canonical log line. */
+export function createConsoleDrain(options: ConsoleDrainOptions = {}): WideEventDrain {
   const writer = options.writer ?? ((payload: string) => console.log(payload));
 
   return (event) => {
