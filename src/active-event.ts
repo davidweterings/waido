@@ -25,7 +25,7 @@ import { deepMerge, isPlainObject, isUnsafeKey, readOwn, sanitizeData } from "#s
 
 const MAX_ERRORS = 10;
 
-export interface LoggerDependencies {
+export interface ActiveWideEventDependencies {
   sampler: WideEventSampler;
   enrichers: WideEventEnricher[];
   redact?: WideEventRedactor;
@@ -36,7 +36,7 @@ export interface LoggerDependencies {
   report: (error: unknown, context: WideEventErrorContext) => void;
 }
 
-export interface LoggerInit extends StartWideEventInput {
+export interface ActiveWideEventInit extends StartWideEventInput {
   id: string;
   parentId?: string;
   startedAt: Date;
@@ -48,7 +48,8 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   return typeof (value as { then?: unknown } | null | undefined)?.then === "function";
 }
 
-export class WideEventLogger {
+/** A wide event while it is being built. It becomes a `WideEvent` when emitted. */
+export class ActiveWideEvent {
   private readonly id_: string;
   private readonly parentId?: string;
   private name: string;
@@ -70,8 +71,8 @@ export class WideEventLogger {
   private result: WideEvent | undefined;
 
   public constructor(
-    private readonly dependencies: LoggerDependencies,
-    init: LoggerInit,
+    private readonly dependencies: ActiveWideEventDependencies,
+    init: ActiveWideEventInit,
   ) {
     this.id_ = init.id;
     this.parentId = init.parentId;
@@ -212,8 +213,8 @@ export class WideEventLogger {
   }
 
   /** Records an error, which makes the outcome `error` unless `setOutcome()` says otherwise. */
-  public error(error: unknown, patch?: WideEventData, details?: WideEventErrorDetails): this {
-    if (!this.acceptsWrite("error")) {
+  public addError(error: unknown, patch?: WideEventData, details?: WideEventErrorDetails): this {
+    if (!this.acceptsWrite("addError")) {
       return this;
     }
 
@@ -433,7 +434,7 @@ export class WideEventLogger {
     if (!this.lateWriteReported) {
       this.lateWriteReported = true;
       this.report(
-        new Error(`log.${method}() was called after the event was emitted, so it was ignored`),
+        new Error(`event.${method}() was called after the event was emitted, so it was ignored`),
         "late_write",
       );
     }
@@ -451,7 +452,7 @@ export class WideEventLogger {
   }
 }
 
-class NoopLogger extends WideEventLogger {
+class NoopWideEvent extends ActiveWideEvent {
   public constructor() {
     super(
       {
@@ -496,7 +497,7 @@ class NoopLogger extends WideEventLogger {
   public override setSamplingDecision(): this {
     return this;
   }
-  public override error(): this {
+  public override addError(): this {
     return this;
   }
   public override hasEmitted(): boolean {
@@ -507,4 +508,4 @@ class NoopLogger extends WideEventLogger {
   }
 }
 
-export const noopLogger: WideEventLogger = new NoopLogger();
+export const noopWideEvent: ActiveWideEvent = new NoopWideEvent();

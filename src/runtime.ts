@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { createConsoleDrain } from "#src/drains.js";
-import { noopLogger, WideEventLogger } from "#src/logger.js";
+import { noopWideEvent, ActiveWideEvent } from "#src/active-event.js";
 import { DEFAULT_MAX_BYTES } from "#src/payload.js";
 import type {
   StartWideEventInput,
@@ -44,7 +44,7 @@ export interface WideEventRuntimeHandle {
   destroy(options?: FlushWideEventsOptions): Promise<FlushWideEventsResult>;
 }
 
-const storage = new AsyncLocalStorage<WideEventLogger>();
+const storage = new AsyncLocalStorage<ActiveWideEvent>();
 const pendingDrains = new Set<Promise<void>>();
 const activeScopes = new Map<symbol, Promise<void>>();
 let runtime: Runtime | undefined;
@@ -172,7 +172,7 @@ function mergeTraceContexts(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function inheritTraceContext(parent: WideEventLogger | undefined): WideEventTraceContext {
+function inheritTraceContext(parent: ActiveWideEvent | undefined): WideEventTraceContext {
   const trace = parent?.getTraceContext();
 
   return {
@@ -240,19 +240,19 @@ export function initWaido(config: WideEventRuntimeConfig = {}): WideEventRuntime
 
 /**
  * Starts an event without putting it in context, for building custom adapters. Returns a no-op
- * logger when the runtime isn't initialized or the `filter` rejects the input.
+ * event when the runtime isn't initialized or the `filter` rejects the input.
  */
-export function createWideEventLogger(input: StartWideEventInput): WideEventLogger {
+export function createWideEvent(input: StartWideEventInput): ActiveWideEvent {
   const current = runtime;
   if (current === undefined || isFilteredOut(current, input)) {
-    return noopLogger;
+    return noopWideEvent;
   }
 
   const store = storage.getStore();
-  const parent = store === noopLogger ? undefined : store;
+  const parent = store === noopWideEvent ? undefined : store;
   const scopes = beginIntegrations(current, input);
 
-  return new WideEventLogger(
+  return new ActiveWideEvent(
     {
       sampler: current.sampler,
       enrichers: current.config.enrichers ?? [],
@@ -280,12 +280,12 @@ export function createWideEventLogger(input: StartWideEventInput): WideEventLogg
   );
 }
 
-export function runWithLoggerContext<T>(logger: WideEventLogger, work: () => T): T {
-  return storage.run(logger, work);
+export function runWithWideEvent<T>(event: ActiveWideEvent, work: () => T): T {
+  return storage.run(event, work);
 }
 
-export function useLogger(): WideEventLogger {
-  return storage.getStore() ?? noopLogger;
+export function useWideEvent(): ActiveWideEvent {
+  return storage.getStore() ?? noopWideEvent;
 }
 
 /** Reports a failure from an adapter's user-supplied callback to `onError`. */
@@ -316,22 +316,22 @@ export function startWideEventScope(): () => void {
  * Runs `work` with a wide event in context, then emits the event. Returns or rethrows exactly what
  * `work` does: a telemetry failure can't change the result.
  */
-export async function withWideContext<T>(
+export async function withWideEvent<T>(
   input: StartWideEventInput,
-  work: (logger: WideEventLogger) => Promise<T> | T,
+  work: (event: ActiveWideEvent) => Promise<T> | T,
 ): Promise<T> {
-  const logger = createWideEventLogger(input);
+  const event = createWideEvent(input);
   const closeScope = startWideEventScope();
 
-  return storage.run(logger, async () => {
+  return storage.run(event, async () => {
     try {
-      const value = await work(logger);
-      logger.emit();
+      const value = await work(event);
+      event.emit();
       return value;
     } catch (error) {
-      if (!logger.hasEmitted()) {
-        logger.error(error);
-        logger.emit();
+      if (!event.hasEmitted()) {
+        event.addError(error);
+        event.emit();
       }
 
       throw error;

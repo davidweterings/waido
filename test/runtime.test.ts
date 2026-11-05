@@ -2,12 +2,12 @@ import {
   createConsoleDrain,
   createRedactor,
   createStructuredError,
-  createWideEventLogger,
+  createWideEvent,
   flushWideEvents,
   initWaido,
-  runWithLoggerContext,
-  useLogger,
-  withWideContext,
+  runWithWideEvent,
+  useWideEvent,
+  withWideEvent,
 } from "../src/index.js";
 import type { WideEvent, WideEventErrorContext, WideEventRuntimeConfig } from "../src/index.js";
 import { __resetWideEventsForTests } from "#src/runtime.js";
@@ -29,14 +29,14 @@ describe("runtime", () => {
     __resetWideEventsForTests();
   });
 
-  describe("withWideContext", () => {
+  describe("withWideEvent", () => {
     it("shares one event through AsyncLocalStorage", async () => {
       const { events, runtime } = setup({ service: "test-service" });
 
-      await withWideContext({ name: "unit-job", kind: "function" }, async () => {
-        useLogger().setFields({ user: { id: "user_123" } });
+      await withWideEvent({ name: "unit-job", kind: "function" }, async () => {
+        useWideEvent().setFields({ user: { id: "user_123" } });
         await Promise.resolve();
-        useLogger().setFields({ user: { tier: "pro" }, step: "done" });
+        useWideEvent().setFields({ user: { tier: "pro" }, step: "done" });
       });
       await runtime.flush();
 
@@ -52,7 +52,7 @@ describe("runtime", () => {
 
     it("returns the work's value", async () => {
       setup();
-      await expect(withWideContext({ name: "job" }, () => 42)).resolves.toBe(42);
+      await expect(withWideEvent({ name: "job" }, () => 42)).resolves.toBe(42);
     });
 
     it("rethrows the work's error unchanged and records it", async () => {
@@ -60,7 +60,7 @@ describe("runtime", () => {
       const failure = new Error("boom");
 
       await expect(
-        withWideContext({ name: "job" }, () => {
+        withWideEvent({ name: "job" }, () => {
           throw failure;
         }),
       ).rejects.toBe(failure);
@@ -69,14 +69,14 @@ describe("runtime", () => {
       expect(events[0]).toMatchObject({ outcome: "error", errors: [{ message: "boom" }] });
     });
 
-    it("runs work with a no-op logger when the runtime isn't initialized", async () => {
-      const result = await withWideContext({ name: "job" }, (log) => {
-        log.set("ignored", true);
+    it("runs work with a no-op event when the runtime isn't initialized", async () => {
+      const result = await withWideEvent({ name: "job" }, (event) => {
+        event.set("ignored", true);
         return "done";
       });
 
       expect(result).toBe("done");
-      expect(useLogger().emit()).toBeUndefined();
+      expect(useWideEvent().emit()).toBeUndefined();
     });
 
     it("doesn't let a failing drain affect the result", async () => {
@@ -88,7 +88,7 @@ describe("runtime", () => {
         ],
       });
 
-      await expect(withWideContext({ name: "job" }, () => "ok")).resolves.toBe("ok");
+      await expect(withWideEvent({ name: "job" }, () => "ok")).resolves.toBe("ok");
       await runtime.flush();
 
       expect(failures[0].context).toMatchObject({ stage: "drain", eventName: "job", index: 0 });
@@ -105,7 +105,7 @@ describe("runtime", () => {
         ],
       });
 
-      await expect(withWideContext({ name: "job" }, () => "ok")).resolves.toBe("ok");
+      await expect(withWideEvent({ name: "job" }, () => "ok")).resolves.toBe("ok");
 
       const flushed = runtime.flush({ timeoutMs: 1_000 });
       await new Promise((resolve) => setImmediate(resolve));
@@ -115,53 +115,53 @@ describe("runtime", () => {
   });
 
   describe("outcome", () => {
-    async function outcomeOf(work: (log: ReturnType<typeof useLogger>) => void) {
+    async function outcomeOf(work: (event: ReturnType<typeof useWideEvent>) => void) {
       const { events, runtime } = setup();
-      const logger = createWideEventLogger({ name: "job" });
-      work(logger);
-      logger.emit();
+      const event = createWideEvent({ name: "job" });
+      work(event);
+      event.emit();
       await runtime.flush();
       return events[0].outcome;
     }
 
     it("is error when an error was recorded, even with a 2xx status", async () => {
       await expect(
-        outcomeOf((log) => {
-          log.error(new Error("handled"));
-          log.setStatus(200);
+        outcomeOf((event) => {
+          event.addError(new Error("handled"));
+          event.setStatus(200);
         }),
       ).resolves.toBe("error");
     });
 
     it("lets an explicit outcome win over a recorded error", async () => {
       await expect(
-        outcomeOf((log) => {
-          log.error(new Error("recovered by retry"));
-          log.setOutcome("success");
+        outcomeOf((event) => {
+          event.addError(new Error("recovered by retry"));
+          event.setOutcome("success");
         }),
       ).resolves.toBe("success");
     });
 
     it("is error for a 5xx status", async () => {
-      await expect(outcomeOf((log) => log.setStatus(503))).resolves.toBe("error");
+      await expect(outcomeOf((event) => event.setStatus(503))).resolves.toBe("error");
     });
 
     it("is success for a 4xx status with no recorded error", async () => {
-      await expect(outcomeOf((log) => log.setStatus(404))).resolves.toBe("success");
+      await expect(outcomeOf((event) => event.setStatus(404))).resolves.toBe("success");
     });
 
     it("prefers a recorded error over aborted", async () => {
       const { events, runtime } = setup();
-      const logger = createWideEventLogger({ name: "job" });
-      logger.error(new Error("failed first"));
-      logger.emit({ aborted: true });
+      const event = createWideEvent({ name: "job" });
+      event.addError(new Error("failed first"));
+      event.emit({ aborted: true });
       await runtime.flush();
       expect(events[0].outcome).toBe("error");
     });
 
     it("prefers aborted over a 5xx status", async () => {
       const { events, runtime } = setup();
-      createWideEventLogger({ name: "job" }).emit({ aborted: true, status: 500 });
+      createWideEvent({ name: "job" }).emit({ aborted: true, status: 500 });
       await runtime.flush();
       expect(events[0].outcome).toBe("aborted");
     });
@@ -171,7 +171,7 @@ describe("runtime", () => {
     it("adds structured why, fix and link fields", async () => {
       const { events, runtime } = setup();
 
-      await withWideContext({ name: "checkout" }, () => {
+      await withWideEvent({ name: "checkout" }, () => {
         throw createStructuredError({
           message: "Payment failed",
           why: "Card declined by issuer",
@@ -195,8 +195,8 @@ describe("runtime", () => {
       const { events, runtime } = setup();
       const failure = new Error("boom");
 
-      await withWideContext({ name: "job" }, (log) => {
-        log.error(failure);
+      await withWideEvent({ name: "job" }, (event) => {
+        event.addError(failure);
         throw failure;
       }).catch(() => undefined);
       await runtime.flush();
@@ -206,12 +206,12 @@ describe("runtime", () => {
 
     it("keeps the first 10 errors and counts the rest", async () => {
       const { events, runtime } = setup();
-      const logger = createWideEventLogger({ name: "job" });
+      const event = createWideEvent({ name: "job" });
 
       for (let index = 0; index < 13; index += 1) {
-        logger.error(new Error(`error ${index}`));
+        event.addError(new Error(`error ${index}`));
       }
-      logger.emit();
+      event.emit();
       await runtime.flush();
 
       expect(events[0].errors).toHaveLength(10);
@@ -224,9 +224,9 @@ describe("runtime", () => {
       const failure = new Error("big");
       failure.stack = "x".repeat(10_000);
 
-      const logger = createWideEventLogger({ name: "job" });
-      logger.error(failure);
-      logger.emit();
+      const event = createWideEvent({ name: "job" });
+      event.addError(failure);
+      event.emit();
       await runtime.flush();
 
       expect(events[0].errors[0].stack?.length).toBeLessThanOrEqual(4096);
@@ -237,8 +237,8 @@ describe("runtime", () => {
     it("keeps the event when a field is a BigInt", async () => {
       const { events, runtime } = setup();
       await expect(
-        withWideContext({ name: "job" }, (log) => {
-          log.set("amount", 10n);
+        withWideEvent({ name: "job" }, (event) => {
+          event.set("amount", 10n);
           return "ok";
         }),
       ).resolves.toBe("ok");
@@ -252,9 +252,9 @@ describe("runtime", () => {
       circular.self = circular;
 
       await expect(
-        withWideContext({ name: "job" }, (log) => {
-          log.set("viaSet", circular);
-          log.setFields({ viaFields: circular });
+        withWideEvent({ name: "job" }, (event) => {
+          event.set("viaSet", circular);
+          event.setFields({ viaFields: circular });
           return "ok";
         }),
       ).resolves.toBe("ok");
@@ -272,8 +272,8 @@ describe("runtime", () => {
         },
       };
 
-      await withWideContext({ name: "job" }, (log) => {
-        log.set("hostile", hostile);
+      await withWideEvent({ name: "job" }, (event) => {
+        event.set("hostile", hostile);
       });
       await runtime.flush();
 
@@ -283,8 +283,8 @@ describe("runtime", () => {
     it("converts common non-JSON values", async () => {
       const { events, runtime } = setup();
 
-      await withWideContext({ name: "job" }, (log) => {
-        log.setFields({
+      await withWideEvent({ name: "job" }, (event) => {
+        event.setFields({
           date: new Date(0),
           map: new Map([["key", 1]]),
           set: new Set([1, 2]),
@@ -310,10 +310,10 @@ describe("runtime", () => {
       const { events, runtime } = setup();
       const untrusted = JSON.parse('{"__proto__":{"polluted":true},"safe":1}') as object;
 
-      await withWideContext({ name: "job", data: untrusted }, (log) => {
-        log.setFields(untrusted);
-        log.setFields("__proto__", { polluted: true });
-        log.set("__proto__", { polluted: true });
+      await withWideEvent({ name: "job", data: untrusted }, (event) => {
+        event.setFields(untrusted);
+        event.setFields("__proto__", { polluted: true });
+        event.set("__proto__", { polluted: true });
       });
       await runtime.flush();
 
@@ -326,7 +326,7 @@ describe("runtime", () => {
     it("truncates the largest fields and keeps small ones", async () => {
       const { events, runtime } = setup({ payloadPolicy: { maxBytes: 800 } });
 
-      await withWideContext(
+      await withWideEvent(
         {
           name: "oversized",
           data: { user: { id: "u1", bio: "x".repeat(2000) }, keep: "ok" },
@@ -343,7 +343,7 @@ describe("runtime", () => {
     it("applies a 64 KiB limit by default", async () => {
       const { events, runtime } = setup();
 
-      await withWideContext({ name: "big", data: { blob: "x".repeat(100_000) } }, () => undefined);
+      await withWideEvent({ name: "big", data: { blob: "x".repeat(100_000) } }, () => undefined);
       await runtime.flush();
 
       expect(events[0].payload).toMatchObject({ truncated: true, maxBytes: 65_536 });
@@ -353,8 +353,8 @@ describe("runtime", () => {
     it("keeps an oversized error event, with its error intact", async () => {
       const { events, runtime } = setup({ payloadPolicy: { maxBytes: 1_500 } });
 
-      await withWideContext({ name: "big-error" }, (log) => {
-        log.set("blob", "x".repeat(5_000));
+      await withWideEvent({ name: "big-error" }, (event) => {
+        event.set("blob", "x".repeat(5_000));
         throw new Error("payment failed");
       }).catch(() => undefined);
       await runtime.flush();
@@ -366,14 +366,14 @@ describe("runtime", () => {
 
     it("stays within the limit when errors alone would exceed it", async () => {
       const { events, runtime } = setup({ payloadPolicy: { maxBytes: 4_000 } });
-      const logger = createWideEventLogger({ name: "many-errors" });
+      const event = createWideEvent({ name: "many-errors" });
 
       for (let index = 0; index < 10; index += 1) {
         const failure = new Error(`failure ${index}`);
         failure.stack = "s".repeat(4_000);
-        logger.error(failure);
+        event.addError(failure);
       }
-      logger.emit();
+      event.emit();
       await runtime.flush();
 
       expect(events[0].errors).toHaveLength(10);
@@ -402,7 +402,7 @@ describe("runtime", () => {
         },
       });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(seenBySampler).toEqual([
@@ -421,7 +421,7 @@ describe("runtime", () => {
         ],
       });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(events[0].data).toEqual({});
@@ -440,7 +440,7 @@ describe("runtime", () => {
         ],
       });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(events[0].data.second).toBe(true);
@@ -454,7 +454,7 @@ describe("runtime", () => {
         },
       });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(events[0].sampling.reason).toBe("sampler_error");
@@ -468,7 +468,7 @@ describe("runtime", () => {
         },
       });
 
-      await withWideContext({ name: "job", data: { secret: "value" } }, () => undefined);
+      await withWideEvent({ name: "job", data: { secret: "value" } }, () => undefined);
       await runtime.flush();
 
       expect(events[0].data).toEqual({ __redactionFailed: true });
@@ -478,8 +478,8 @@ describe("runtime", () => {
     it("lets a forced sampling decision override the sampler", async () => {
       const { events, runtime } = setup({ sampler: () => false });
 
-      await withWideContext({ name: "job" }, (log) => {
-        log.setSamplingDecision({ sampled: true, reason: "vip" });
+      await withWideEvent({ name: "job" }, (event) => {
+        event.setSamplingDecision({ sampled: true, reason: "vip" });
       });
       await runtime.flush();
 
@@ -488,16 +488,16 @@ describe("runtime", () => {
 
     it("returns the kept event from emit, undefined when dropped, and emits once", async () => {
       const { events, runtime } = setup();
-      const logger = createWideEventLogger({ name: "job" });
+      const event = createWideEvent({ name: "job" });
 
-      const first = logger.emit();
+      const first = event.emit();
       expect(first?.name).toBe("job");
-      expect(logger.emit()).toBe(first);
+      expect(event.emit()).toBe(first);
       await runtime.flush();
       expect(events).toHaveLength(1);
 
       initWaido({ sampler: () => false, drains: [] });
-      expect(createWideEventLogger({ name: "dropped" }).emit()).toBeUndefined();
+      expect(createWideEvent({ name: "dropped" }).emit()).toBeUndefined();
     });
   });
 
@@ -506,11 +506,11 @@ describe("runtime", () => {
       const { events, runtime } = setup();
       let parentId: string | undefined;
 
-      await withWideContext(
+      await withWideEvent(
         { name: "parent", traceContext: { traceId: "a".repeat(32), spanId: "b".repeat(16) } },
         async (parent) => {
           parentId = parent.id;
-          await withWideContext({ name: "child" }, (child) => {
+          await withWideEvent({ name: "child" }, (child) => {
             child.set("level", "child");
           });
         },
@@ -531,11 +531,11 @@ describe("runtime", () => {
 
     it("ignores writes after emit and reports the first one", async () => {
       const { events, failures, runtime } = setup();
-      const logger = createWideEventLogger({ name: "job" });
+      const event = createWideEvent({ name: "job" });
 
-      logger.emit();
-      logger.set("late", 1);
-      logger.set("later", 2);
+      event.emit();
+      event.set("late", 1);
+      event.set("later", 2);
       await runtime.flush();
 
       expect(events[0].data).toEqual({});
@@ -545,15 +545,15 @@ describe("runtime", () => {
   });
 
   describe("filter", () => {
-    it("gives filtered work a no-op logger", async () => {
+    it("gives filtered work a no-op event", async () => {
       const seen: string[] = [];
       const { events, runtime } = setup({
         filter: (input) => input.name !== "noise",
         enrichers: [({ event }) => void seen.push(event.name)],
       });
 
-      await withWideContext({ name: "noise" }, (log) => {
-        log.error(new Error("still excluded"));
+      await withWideEvent({ name: "noise" }, (event) => {
+        event.addError(new Error("still excluded"));
       });
       await runtime.flush();
 
@@ -568,7 +568,7 @@ describe("runtime", () => {
         },
       });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(events).toHaveLength(1);
@@ -581,7 +581,7 @@ describe("runtime", () => {
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       const runtime = initWaido();
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(log).toHaveBeenCalledOnce();
@@ -593,7 +593,7 @@ describe("runtime", () => {
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       const runtime = initWaido({ drains: [] });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(log).not.toHaveBeenCalled();
@@ -607,7 +607,7 @@ describe("runtime", () => {
         integrations: [{ name: "sink", drain: (event) => void events.push(event) }],
       });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(log).not.toHaveBeenCalled();
@@ -619,7 +619,7 @@ describe("runtime", () => {
       const lines: string[] = [];
       const runtime = initWaido({ drains: [createConsoleDrain({ writer: (l) => lines.push(l) })] });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(JSON.parse(lines[0])).toMatchObject({ name: "job" });
@@ -631,7 +631,7 @@ describe("runtime", () => {
         drains: [() => new Promise<void>(() => undefined)],
       });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
 
       await expect(runtime.flush({ timeoutMs: 1_000 })).resolves.toEqual({
         completed: true,
@@ -657,7 +657,7 @@ describe("runtime", () => {
         ],
       });
 
-      createWideEventLogger({ name: "async-flush" }).emit();
+      createWideEvent({ name: "async-flush" }).emit();
 
       await expect(flushWideEvents()).resolves.toEqual({ completed: true, pending: 0 });
       expect(names).toEqual(["async-flush"]);
@@ -668,7 +668,7 @@ describe("runtime", () => {
       const { events } = setup();
       let release!: () => void;
 
-      const work = withWideContext({ name: "active" }, async () => {
+      const work = withWideEvent({ name: "active" }, async () => {
         await new Promise<void>((resolve) => {
           release = resolve;
         });
@@ -692,7 +692,7 @@ describe("runtime", () => {
     it("resolves with completed false on timeout instead of rejecting", async () => {
       const { runtime } = setup({ drains: [() => new Promise<void>(() => undefined)] });
 
-      createWideEventLogger({ name: "stuck" }).emit();
+      createWideEvent({ name: "stuck" }).emit();
 
       await expect(runtime.flush({ timeoutMs: 10 })).resolves.toEqual({
         completed: false,
@@ -709,11 +709,11 @@ describe("runtime", () => {
           },
         ],
       });
-      createWideEventLogger({ name: "stuck" }).emit();
+      createWideEvent({ name: "stuck" }).emit();
 
       await expect(runtime.destroy({ timeoutMs: 10 })).resolves.toMatchObject({ completed: false });
 
-      expect(createWideEventLogger({ name: "after" }).emit()).toBeUndefined();
+      expect(createWideEvent({ name: "after" }).emit()).toBeUndefined();
     });
 
     it("doesn't let an old handle shut down a newer runtime", async () => {
@@ -721,7 +721,7 @@ describe("runtime", () => {
       const second = setup();
 
       await first.runtime.destroy();
-      await withWideContext({ name: "still-running" }, () => undefined);
+      await withWideEvent({ name: "still-running" }, () => undefined);
       await second.runtime.flush();
 
       expect(second.events).toHaveLength(1);
@@ -733,7 +733,7 @@ describe("runtime", () => {
       setup({ service: "first", sampler: () => false });
       const { events, runtime } = setup();
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(events[0].service).toBeUndefined();
@@ -751,33 +751,33 @@ describe("runtime", () => {
         },
       });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await expect(runtime.flush()).resolves.toMatchObject({ completed: true });
     });
   });
 
-  describe("useLogger", () => {
+  describe("useWideEvent", () => {
     it("is a silent no-op outside any context", () => {
-      const log = useLogger();
-      log.setFields({ ignored: true });
-      log.increment("counter");
-      log.append("list", "item");
-      log.error(new Error("ignored"));
-      expect(log.hasEmitted()).toBe(false);
-      expect(log.emit()).toBeUndefined();
+      const event = useWideEvent();
+      event.setFields({ ignored: true });
+      event.increment("counter");
+      event.append("list", "item");
+      event.addError(new Error("ignored"));
+      expect(event.hasEmitted()).toBe(false);
+      expect(event.emit()).toBeUndefined();
     });
 
-    it("works inside runWithLoggerContext", async () => {
+    it("works inside runWithWideEvent", async () => {
       const { events, runtime } = setup();
-      const logger = createWideEventLogger({ name: "manual" });
+      const event = createWideEvent({ name: "manual" });
 
-      runWithLoggerContext(logger, () => {
-        useLogger().increment("count").increment("count", 2).append("items", "a");
-        useLogger().time("step");
-        useLogger().timeEnd("step");
-        useLogger().setStatus(201);
+      runWithWideEvent(event, () => {
+        useWideEvent().increment("count").increment("count", 2).append("items", "a");
+        useWideEvent().time("step");
+        useWideEvent().timeEnd("step");
+        useWideEvent().setStatus(201);
       });
-      logger.emit();
+      event.emit();
       await runtime.flush();
 
       expect(events[0]).toMatchObject({
@@ -793,7 +793,7 @@ describe("runtime", () => {
         traceContextExtractor: () => ({ traceId: "e".repeat(32), spanId: "f".repeat(16) }),
       });
 
-      await withWideContext(
+      await withWideEvent(
         { name: "job", traceContext: { traceId: "a".repeat(32), parentSpanId: "b".repeat(16) } },
         () => undefined,
       );
@@ -816,7 +816,7 @@ describe("runtime", () => {
         drains: [(event) => void events.push(event)],
       });
 
-      await withWideContext(
+      await withWideEvent(
         { name: "job", traceContext: { traceId: "a".repeat(32), parentSpanId: "b".repeat(16) } },
         () => undefined,
       );

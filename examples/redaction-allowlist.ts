@@ -1,4 +1,4 @@
-import { createConsoleDrain, createRedactor, initWaido, useLogger, withWideContext } from "waido";
+import { createConsoleDrain, createRedactor, initWaido, useWideEvent, withWideEvent } from "waido";
 
 const ALLOWED_TOP_LEVEL_KEYS = new Set(["http", "request", "user", "order", "tenantId"]);
 
@@ -20,8 +20,8 @@ const waido = initWaido({
   drains: [createConsoleDrain({ pretty: true })],
 });
 
-await withWideContext({ name: "create-order", kind: "function" }, () => {
-  useLogger().setFields({
+await withWideEvent({ name: "create-order", kind: "function" }, () => {
+  useWideEvent().setFields({
     tenantId: "acme",
     user: {
       id: "u_42",

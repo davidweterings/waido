@@ -1,5 +1,5 @@
 import * as Sentry from "@sentry/node";
-import { initWaido, useLogger, withWideContext } from "waido";
+import { initWaido, useWideEvent, withWideEvent } from "waido";
 import type { WideEvent } from "waido";
 
 type SentryTagValue = string | number | boolean | undefined;
@@ -86,15 +86,15 @@ const waido = initWaido({
   drains: [createSentryExceptionDrain()],
 });
 
-await withWideContext({ name: "checkout", kind: "function" }, () => {
-  const log = useLogger();
+await withWideEvent({ name: "checkout", kind: "function" }, () => {
+  const event = useWideEvent();
 
   try {
     throw new Error("Card declined");
   } catch (error) {
     // Recording the error is enough to make the outcome "error".
-    log.setStatus(402);
-    log.error(
+    event.setStatus(402);
+    event.addError(
       error,
       {
         orderId: "ord_42",

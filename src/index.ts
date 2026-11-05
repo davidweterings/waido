@@ -1,12 +1,12 @@
 export {
-  createWideEventLogger,
+  createWideEvent,
   flushWideEvents,
   initWaido,
-  runWithLoggerContext,
-  useLogger,
-  withWideContext,
+  runWithWideEvent,
+  useWideEvent,
+  withWideEvent,
 } from "#src/runtime.js";
-export { WideEventLogger } from "#src/logger.js";
+export { ActiveWideEvent } from "#src/active-event.js";
 export { createConsoleDrain } from "#src/drains.js";
 export {
   createNameRateSampler,

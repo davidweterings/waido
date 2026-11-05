@@ -5,7 +5,7 @@ import {
   errors,
   initWaido,
   slowerThan,
-  useLogger,
+  useWideEvent,
 } from "waido";
 import { createExpressErrorMiddleware, createExpressWideEventMiddleware } from "waido/express";
 
@@ -20,15 +20,15 @@ app.use(express.json());
 app.use(createExpressWideEventMiddleware({ excludePaths: ["/checkout/health"] }));
 
 app.get("/cart", async (req, res) => {
-  const log = useLogger();
+  const event = useWideEvent();
 
-  log.setFields({
+  event.setFields({
     cart: {
       id: "123",
     },
   });
 
-  log.setFields({
+  event.setFields({
     cart: {
       items: req.body?.items?.length ?? 0,
     },
@@ -40,15 +40,15 @@ app.get("/cart", async (req, res) => {
 });
 
 app.post("/checkout", async (req, res) => {
-  const log = useLogger();
+  const event = useWideEvent();
 
-  log.setFields({
+  event.setFields({
     user: {
       id: req.body.userId,
     },
   });
 
-  log.setFields({
+  event.setFields({
     cart: {
       items: req.body.items?.length ?? 0,
     },

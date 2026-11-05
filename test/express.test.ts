@@ -5,7 +5,7 @@ import express5 from "express";
 import express4 from "express4";
 import type { ErrorRequestHandler, Express, Router } from "express";
 
-import { initWaido, useLogger, withWideContext } from "../src/index.js";
+import { initWaido, useWideEvent, withWideEvent } from "../src/index.js";
 import type { WideEvent, WideEventRuntimeConfig } from "../src/index.js";
 import {
   createExpressErrorMiddleware,
@@ -83,9 +83,9 @@ describe.each([
     const { events, flush } = await start(
       (app) => {
         app.get("/users/:id", async (request, response) => {
-          useLogger().setFields({ user: { id: request.params.id } });
+          useWideEvent().setFields({ user: { id: request.params.id } });
           await Promise.resolve();
-          useLogger().setFields({ operation: "load-user" });
+          useWideEvent().setFields({ operation: "load-user" });
           response.status(201).json({ ok: true });
         });
       },
@@ -179,7 +179,7 @@ describe.each([
     it("reports a handled error on a 200 as an error", async () => {
       const { events, flush } = await start((app) => {
         app.get("/handled", (_request, response) => {
-          useLogger().error(new Error("card declined"));
+          useWideEvent().addError(new Error("card declined"));
           response.status(200).json({ ok: false });
         });
       });
@@ -197,7 +197,7 @@ describe.each([
     it("reports a logged error on a 400 as an error", async () => {
       const { events, flush } = await start((app) => {
         app.get("/client", (_request, response) => {
-          useLogger().error(new Error("validation failed"));
+          useWideEvent().addError(new Error("validation failed"));
           response.status(400).end();
         });
       });
@@ -245,7 +245,7 @@ describe.each([
       const { events, flush } = await start((app) => {
         app.get("/both", (_request, _response, next) => {
           const failure = new Error("once");
-          useLogger().error(failure);
+          useWideEvent().addError(failure);
           next(failure);
         });
       });
@@ -347,7 +347,7 @@ describe.each([
   describe("exclusion", () => {
     function healthRoute(app: Express) {
       app.get("/api/health", (_request, response) => {
-        useLogger().setFields({ route: "health" });
+        useWideEvent().setFields({ route: "health" });
         response.status(500).end();
       });
       app.get("/api/orders", (_request, response) => {
@@ -385,12 +385,12 @@ describe.each([
       expect(events).toHaveLength(0);
     });
 
-    it("doesn't let an outer logger receive fields from an excluded request", async () => {
+    it("doesn't let an outer event receive fields from an excluded request", async () => {
       const { events, flush } = await start(healthRoute, {
         middleware: { excludePaths: ["/api/health"] },
       });
 
-      await withWideContext({ name: "outer" }, () => fetch(`${baseUrl}/api/health`));
+      await withWideEvent({ name: "outer" }, () => fetch(`${baseUrl}/api/health`));
       await flush();
 
       expect(events.map((event) => event.name)).toEqual(["outer"]);
@@ -461,7 +461,7 @@ describe.each([
 
     const { events, flush } = await start((app) => {
       app.get("/slow", (_request, response) => {
-        useLogger().setFields({ queue: "payments" });
+        useWideEvent().setFields({ queue: "payments" });
         reachedHandler();
         release = () => response.status(202).end();
       });
@@ -490,7 +490,7 @@ describe.each([
     const app = express();
     app.use(createExpressWideEventMiddleware());
     app.get("/a", (_request, response) => {
-      useLogger().set("ignored", true);
+      useWideEvent().set("ignored", true);
       response.status(204).end();
     });
 

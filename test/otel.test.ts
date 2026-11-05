@@ -10,10 +10,10 @@ import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import {
   createRedactor,
   createTailSampler,
-  createWideEventLogger,
+  createWideEvent,
   errors,
   initWaido,
-  withWideContext,
+  withWideEvent,
 } from "../src/index.js";
 import type { WideEvent, WideEventRuntimeConfig } from "../src/index.js";
 import { otel, type OtelOptions } from "../src/otel.js";
@@ -75,7 +75,7 @@ describe("waido/otel", () => {
         const context = trace.getActiveSpan()?.spanContext();
         traceId = context?.traceId ?? "";
         spanId = context?.spanId ?? "";
-        await withWideContext({ name: "job" }, () => undefined);
+        await withWideEvent({ name: "job" }, () => undefined);
       });
       await runtime.flush();
 
@@ -88,7 +88,7 @@ describe("waido/otel", () => {
 
       await inSpan(async () => {
         traceId = trace.getActiveSpan()?.spanContext().traceId ?? "";
-        await withWideContext(
+        await withWideEvent(
           {
             name: "job",
             traceContext: { traceId: "a".repeat(32), parentSpanId: "b".repeat(16) },
@@ -105,7 +105,7 @@ describe("waido/otel", () => {
     it("leaves trace fields empty with no active span", async () => {
       const { events, runtime } = setup();
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(events[0].traceId).toBeUndefined();
@@ -117,8 +117,8 @@ describe("waido/otel", () => {
       const { runtime } = setup();
 
       await inSpan(() =>
-        withWideContext({ name: "job", kind: "queue" }, (log) => {
-          log.setFields({
+        withWideEvent({ name: "job", kind: "queue" }, (event) => {
+          event.setFields({
             user: { id: "u1", tier: "pro" },
             count: 3,
             flag: true,
@@ -152,8 +152,8 @@ describe("waido/otel", () => {
       const { events, runtime } = setup(undefined, { sampler: () => false });
 
       await inSpan(() =>
-        withWideContext({ name: "job" }, (log) => {
-          log.set("kept", "on span");
+        withWideEvent({ name: "job" }, (event) => {
+          event.set("kept", "on span");
         }),
       );
       await runtime.flush();
@@ -165,7 +165,7 @@ describe("waido/otel", () => {
     it("doesn't put the sample rate on spans", async () => {
       const { runtime } = setup();
 
-      await inSpan(() => withWideContext({ name: "job" }, () => undefined));
+      await inSpan(() => withWideEvent({ name: "job" }, () => undefined));
       await runtime.flush();
 
       expect(spanExporter.getFinishedSpans()[0].attributes).not.toHaveProperty("waido.sample_rate");
@@ -175,7 +175,7 @@ describe("waido/otel", () => {
       const { runtime } = setup(undefined, { redact: createRedactor({ paths: ["user.email"] }) });
 
       await inSpan(() =>
-        withWideContext({ name: "job", data: { user: { email: "a@b.c" } } }, () => undefined),
+        withWideEvent({ name: "job", data: { user: { email: "a@b.c" } } }, () => undefined),
       );
       await runtime.flush();
 
@@ -186,9 +186,9 @@ describe("waido/otel", () => {
       const { runtime } = setup();
 
       await inSpan(() =>
-        withWideContext({ name: "job" }, (log) => {
-          log.error(new TypeError("first"));
-          log.error(new RangeError("second"));
+        withWideEvent({ name: "job" }, (event) => {
+          event.addError(new TypeError("first"));
+          event.addError(new RangeError("second"));
         }),
       );
       await runtime.flush();
@@ -203,9 +203,9 @@ describe("waido/otel", () => {
       const { runtime } = setup();
 
       await inSpan(() =>
-        withWideContext({ name: "job" }, (log) => {
-          log.error(new Error("recovered"));
-          log.setOutcome("success");
+        withWideEvent({ name: "job" }, (event) => {
+          event.addError(new Error("recovered"));
+          event.setOutcome("success");
         }),
       );
       await runtime.flush();
@@ -221,7 +221,7 @@ describe("waido/otel", () => {
 
       await inSpan(async () => {
         const span = trace.getActiveSpan();
-        await withWideContext({ name: "job" }, () => {
+        await withWideEvent({ name: "job" }, () => {
           span?.end();
         });
       });
@@ -235,9 +235,9 @@ describe("waido/otel", () => {
       const { events, runtime } = setup();
 
       await inSpan(() =>
-        withWideContext({ name: "parent", data: { owner: "parent" } }, async () => {
-          await withWideContext({ name: "child", data: { owner: "child", extra: 1 } }, (log) => {
-            log.error(new Error("handled in the child"));
+        withWideEvent({ name: "parent", data: { owner: "parent" } }, async () => {
+          await withWideEvent({ name: "child", data: { owner: "child", extra: 1 } }, (event) => {
+            event.addError(new Error("handled in the child"));
           });
         }),
       );
@@ -263,12 +263,12 @@ describe("waido/otel", () => {
       await tracer.startActiveSpan("server", async (server) => {
         serverSpanId = server.spanContext().spanId;
 
-        const logger = tracer.startActiveSpan("middleware", (middleware) => {
+        const event = tracer.startActiveSpan("middleware", (middleware) => {
           middleware.end();
-          return createWideEventLogger({ name: "job", data: { field: 1 } });
+          return createWideEvent({ name: "job", data: { field: 1 } });
         });
 
-        logger.emit();
+        event.emit();
         server.end();
       });
       await runtime.flush();
@@ -281,7 +281,7 @@ describe("waido/otel", () => {
     it("can be turned off", async () => {
       const { runtime } = setup({ spans: false });
 
-      await inSpan(() => withWideContext({ name: "job", data: { field: 1 } }, () => undefined));
+      await inSpan(() => withWideEvent({ name: "job", data: { field: 1 } }, () => undefined));
       await runtime.flush();
 
       expect(spanExporter.getFinishedSpans()[0].attributes).not.toHaveProperty("field");
@@ -298,8 +298,8 @@ describe("waido/otel", () => {
         const context = trace.getActiveSpan()?.spanContext();
         traceId = context?.traceId ?? "";
         spanId = context?.spanId ?? "";
-        await withWideContext({ name: "checkout" }, (log) => {
-          log.setFields({ user: { id: "u1" } });
+        await withWideEvent({ name: "checkout" }, (event) => {
+          event.setFields({ user: { id: "u1" } });
         });
       });
       await runtime.flush();
@@ -320,7 +320,7 @@ describe("waido/otel", () => {
     it("emits nothing for dropped events", async () => {
       const { runtime } = setup(undefined, { sampler: () => false });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(logExporter.getFinishedLogRecords()).toHaveLength(0);
@@ -335,7 +335,7 @@ describe("waido/otel", () => {
       });
 
       await trace.getTracer("test").startActiveSpan("unsampled", {}, unsampled, async (span) => {
-        await withWideContext({ name: "job", data: { field: 1 } }, () => undefined);
+        await withWideEvent({ name: "job", data: { field: 1 } }, () => undefined);
         span.end();
       });
       await runtime.flush();
@@ -350,9 +350,9 @@ describe("waido/otel", () => {
         sampler: createTailSampler({ keep: [errors()], rate: 0.05, random: () => 0 }),
       });
 
-      await withWideContext({ name: "kept-by-rate" }, () => undefined);
-      await withWideContext({ name: "kept-by-rule" }, (log) => {
-        log.error(new Error("boom"));
+      await withWideEvent({ name: "kept-by-rate" }, () => undefined);
+      await withWideEvent({ name: "kept-by-rule" }, (event) => {
+        event.addError(new Error("boom"));
       });
       await runtime.flush();
 
@@ -367,9 +367,9 @@ describe("waido/otel", () => {
     it("maps the first error to exception attributes", async () => {
       const { runtime } = setup();
 
-      await withWideContext({ name: "job" }, (log) => {
-        log.error(new TypeError("first"));
-        log.error(new RangeError("second"));
+      await withWideEvent({ name: "job" }, (event) => {
+        event.addError(new TypeError("first"));
+        event.addError(new RangeError("second"));
       });
       await runtime.flush();
 
@@ -387,9 +387,9 @@ describe("waido/otel", () => {
     it("counts dropped errors in the error count", async () => {
       const { runtime } = setup();
 
-      await withWideContext({ name: "job" }, (log) => {
+      await withWideEvent({ name: "job" }, (event) => {
         for (let index = 0; index < 12; index += 1) {
-          log.error(new Error(`failure ${index}`));
+          event.addError(new Error(`failure ${index}`));
         }
       });
       await runtime.flush();
@@ -400,7 +400,7 @@ describe("waido/otel", () => {
     it("uses the parent span from a header when there is no active span", async () => {
       const { runtime } = setup();
 
-      await withWideContext(
+      await withWideEvent(
         {
           name: "job",
           traceContext: {
@@ -422,7 +422,7 @@ describe("waido/otel", () => {
     it("supports a custom sample rate attribute", async () => {
       const { runtime } = setup({ sampleRateAttribute: "SampleRate" });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       const [record] = logExporter.getFinishedLogRecords();
@@ -433,7 +433,7 @@ describe("waido/otel", () => {
     it("can be turned off", async () => {
       const { runtime } = setup({ logs: false });
 
-      await withWideContext({ name: "job" }, () => undefined);
+      await withWideEvent({ name: "job" }, () => undefined);
       await runtime.flush();
 
       expect(logExporter.getFinishedLogRecords()).toHaveLength(0);

@@ -4,7 +4,7 @@ Wide events for Node.js: one rich event per request, sampled after the work fini
 
 Instead of scattering log lines through your code, you build up one event as a request runs and emit it once at the end. The idea comes from [loggingsucks.com](https://loggingsucks.com/) and Stripe's canonical log lines.
 
-- **One event per unit of work:** read it anywhere with `useLogger()`, without passing it around.
+- **One event per unit of work:** read it anywhere with `useWideEvent()`, without passing it around.
 - **Tail sampling:** always keep errors and slow requests, and sample the rest.
 - **OpenTelemetry:** enrich the active span and export kept events as log records.
 - **Safe by design:** telemetry failures never change what your code returns or throws, and a bad field can't lose an event.
@@ -19,14 +19,14 @@ npm install waido
 ## Quick start
 
 ```ts
-import { initWaido, useLogger, withWideContext } from "waido";
+import { initWaido, useWideEvent, withWideEvent } from "waido";
 
 const waido = initWaido({ service: "billing-api" });
 
-await withWideContext({ name: "rebuild-cache" }, async () => {
-  const log = useLogger();
-  log.setFields({ tenant: { id: "acme" } });
-  log.setFields({ cache: { entries: 1200 } });
+await withWideEvent({ name: "rebuild-cache" }, async () => {
+  const event = useWideEvent();
+  event.setFields({ tenant: { id: "acme" } });
+  event.setFields({ cache: { entries: 1200 } });
 });
 
 await waido.destroy();
@@ -53,13 +53,13 @@ This writes one JSON line to stdout:
 
 It's formatted here for reading. `environment` also appears when `NODE_ENV` is set.
 
-`withWideContext` returns or rethrows exactly what your function does. If you never call `initWaido()`, `useLogger()` is a silent no-op, so libraries can use waido without forcing output on an application.
+`withWideEvent` returns or rethrows exactly what your function does. If you never call `initWaido()`, `useWideEvent()` is a silent no-op, so libraries can use waido without forcing output on an application.
 
 ## Express
 
 ```ts
 import express from "express";
-import { initWaido, useLogger } from "waido";
+import { initWaido, useWideEvent } from "waido";
 import { createExpressErrorMiddleware, createExpressWideEventMiddleware } from "waido/express";
 
 const waido = initWaido({ service: "payments-api" });
@@ -68,7 +68,7 @@ const app = express();
 app.use(createExpressWideEventMiddleware({ excludePaths: ["/health"] }));
 
 app.get("/users/:id", (req, res) => {
-  useLogger().setFields({ user: { id: req.params.id } });
+  useWideEvent().setFields({ user: { id: req.params.id } });
   res.json({ ok: true });
 });
 
@@ -120,17 +120,17 @@ createExpressErrorMiddleware({ isFailure: (error) => !(error instanceof NotFound
 ## Writing to the event
 
 ```ts
-const log = useLogger();
+const event = useWideEvent();
 
-log.set("plan", "pro");
-log.setFields({ user: { id: "u1" } }); // Deep-merges.
-log.setFields("user", { tier: "enterprise" });
-log.increment("db.queries");
-log.append("warnings", "cache miss");
-log.time("charge");
-log.timeEnd("charge"); // Adds timings.charge in milliseconds.
-log.setStatus(402);
-log.error(error, { orderId: "ord_1" }, { why: "Card declined", fix: "Try another card" });
+event.set("plan", "pro");
+event.setFields({ user: { id: "u1" } }); // Deep-merges.
+event.setFields("user", { tier: "enterprise" });
+event.increment("db.queries");
+event.append("warnings", "cache miss");
+event.time("charge");
+event.timeEnd("charge"); // Adds timings.charge in milliseconds.
+event.setStatus(402);
+event.addError(error, { orderId: "ord_1" }, { why: "Card declined", fix: "Try another card" });
 ```
 
 Writes after the event has been emitted are ignored, and the first one is reported to `onError`.
@@ -141,13 +141,13 @@ Any value is safe to pass. BigInts become strings, circular references become `"
 
 The first of these that applies decides the event's `outcome`:
 
-1. An explicit `log.setOutcome()`.
+1. An explicit `event.setOutcome()`.
 2. Any recorded error makes it `error`.
 3. An abandoned request makes it `aborted`.
 4. A status of 500 or above makes it `error`.
 5. Otherwise, `success`.
 
-A 4xx with nothing recorded is a `success`. If you recovered from an error, such as with a successful retry, call `log.setOutcome("success")`.
+A 4xx with nothing recorded is a `success`. If you recovered from an error, such as with a successful retry, call `event.setOutcome("success")`.
 
 ### Structured errors
 
@@ -185,7 +185,7 @@ initWaido({
 - **Decisions follow the trace.** The random part uses OpenTelemetry's consistent sampling algorithm on the trace ID, so services using the same rate keep or drop the same traces.
 - **Counts can be corrected.** Each event records `sampling.sampleRate` as a 1-in-N integer: 20 for a 5% rate, and 1 for rule matches. Multiply by it when counting.
 
-Without a sampler, every event is kept. `createRateSampler` and `createNameRateSampler` cover simpler cases, a custom sampler is any synchronous function returning a boolean or decision, and `log.setSamplingDecision()` overrides the sampler for one event. If a sampler throws, the event is kept and the error goes to `onError`.
+Without a sampler, every event is kept. `createRateSampler` and `createNameRateSampler` cover simpler cases, a custom sampler is any synchronous function returning a boolean or decision, and `event.setSamplingDecision()` overrides the sampler for one event. If a sampler throws, the event is kept and the error goes to `onError`.
 
 ## OpenTelemetry
 
@@ -235,7 +235,7 @@ enrichers → redaction → size limit → span enrichment → sampler → drain
 
 ### Enrichers
 
-Enrichers add fields to every event. They must be synchronous, so fetch anything that needs I/O during the request and `log.set()` it.
+Enrichers add fields to every event. They must be synchronous, so fetch anything that needs I/O during the request and `event.set()` it.
 
 ```ts
 initWaido({
@@ -289,11 +289,11 @@ Waido doesn't batch. If your drain makes a network call per event, batch inside 
 
 ## Nested work
 
-A nested `withWideContext` emits its own event, sharing the trace and setting `parentId` to the outer event. This suits background work that can outlive the request.
+A nested `withWideEvent` emits its own event, sharing the trace and setting `parentId` to the outer event. This suits background work that can outlive the request.
 
 ```ts
-await withWideContext({ name: "import-file" }, async () => {
-  await withWideContext({ name: "parse-row" }, async () => {
+await withWideEvent({ name: "import-file" }, async () => {
+  await withWideEvent({ name: "parse-row" }, async () => {
     // Emits separately, with parentId set to the import-file event.
   });
 });
@@ -318,13 +318,13 @@ Waido has one runtime per process. Calling `initWaido()` again replaces the prev
 ## Custom adapters
 
 ```ts
-import { createWideEventLogger, runWithLoggerContext } from "waido";
+import { createWideEvent, runWithWideEvent } from "waido";
 
-const logger = createWideEventLogger({ name: "consume orders", kind: "queue" });
+const event = createWideEvent({ name: "consume orders", kind: "queue" });
 
-runWithLoggerContext(logger, () => handleMessage(message));
+runWithWideEvent(event, () => handleMessage(message));
 
-logger.emit({ status: "acked" });
+event.emit({ status: "acked" });
 ```
 
 `emit()` returns the event if it was kept, or `undefined` if it was dropped, and later calls have no effect. Use `filter` in `initWaido` to skip capturing some work entirely.

@@ -39,7 +39,8 @@ registerInstrumentations({
 const express = require("express");
 
 async function main() {
-  const { createRedactor, createTailSampler, errors, initWaido, useLogger } = await import("waido");
+  const { createRedactor, createTailSampler, errors, initWaido, useWideEvent } =
+    await import("waido");
   const { createExpressErrorMiddleware, createExpressWideEventMiddleware } =
     await import("waido/express");
   const { otel } = await import("waido/otel");
@@ -56,13 +57,13 @@ async function main() {
   app.use(createExpressWideEventMiddleware());
 
   app.get("/users/:id", async (request, response) => {
-    useLogger().setFields({ user: { id: request.params.id, email: "secret@example.com" } });
+    useWideEvent().setFields({ user: { id: request.params.id, email: "secret@example.com" } });
     await new Promise((resolve) => setTimeout(resolve, 5));
     response.json({ ok: true });
   });
 
   app.get("/handled", (_request, response) => {
-    useLogger().error(new Error("card declined"));
+    useWideEvent().addError(new Error("card declined"));
     response.status(200).json({ ok: false });
   });
 

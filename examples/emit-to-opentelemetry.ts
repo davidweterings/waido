@@ -9,7 +9,7 @@ import {
   NodeTracerProvider,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-node";
-import { createTailSampler, errors, initWaido, withWideContext } from "waido";
+import { createTailSampler, errors, initWaido, withWideEvent } from "waido";
 import { otel } from "waido/otel";
 
 // Your application owns the SDK. Swap the console exporters for OTLP ones in production.
@@ -33,8 +33,8 @@ const tracer = trace.getTracer("example");
 
 await tracer.startActiveSpan("checkout", async (span) => {
   // Sampled out, so no log record. The fields still land on the span.
-  await withWideContext({ name: "checkout", kind: "function" }, (log) => {
-    log.setFields({ order: { id: "ord_111", total: 12_000 } });
+  await withWideEvent({ name: "checkout", kind: "function" }, (event) => {
+    event.setFields({ order: { id: "ord_111", total: 12_000 } });
   });
 
   span.end();
@@ -42,9 +42,9 @@ await tracer.startActiveSpan("checkout", async (span) => {
 
 await tracer.startActiveSpan("refund", async (span) => {
   // Kept by the errors() rule, so it is exported as a log record too.
-  await withWideContext({ name: "refund", kind: "function" }, (log) => {
-    log.setFields({ order: { id: "ord_111" } });
-    log.error(new Error("Refund rejected"));
+  await withWideEvent({ name: "refund", kind: "function" }, (event) => {
+    event.setFields({ order: { id: "ord_111" } });
+    event.addError(new Error("Refund rejected"));
   });
 
   span.end();

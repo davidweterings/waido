@@ -3,13 +3,13 @@ import { errorMonitor } from "node:events";
 import type { ErrorRequestHandler, Request, RequestHandler } from "express";
 
 import { createPathMatcher, normalizePath, type EventFilterPattern } from "#src/filters.js";
-import { noopLogger, type WideEventLogger } from "#src/logger.js";
+import { noopWideEvent, type ActiveWideEvent } from "#src/active-event.js";
 import {
-  createWideEventLogger,
+  createWideEvent,
   reportAdapterError,
-  runWithLoggerContext,
+  runWithWideEvent,
   startWideEventScope,
-  useLogger,
+  useWideEvent,
 } from "#src/runtime.js";
 import { extractTraceContextFromHeaders } from "#src/trace.js";
 import type { WideEventData, WideEventKind } from "#src/types.js";
@@ -36,7 +36,7 @@ export interface ExpressErrorMiddlewareOptions {
   isFailure?: (error: unknown, request: Request) => boolean;
 }
 
-const loggersByRequest = new WeakMap<Request, WideEventLogger>();
+const eventsByRequest = new WeakMap<Request, ActiveWideEvent>();
 
 /** Calls an application callback. Its failure must not break the request being observed. */
 function guarded<T>(work: () => T): T | undefined {
@@ -96,32 +96,32 @@ export function createExpressWideEventMiddleware(
       matchesPath(path) && (options.filter ? guarded(() => options.filter?.(request)) : true);
 
     if (captured === false) {
-      runWithLoggerContext(noopLogger, next);
+      runWithWideEvent(noopWideEvent, next);
       return;
     }
 
-    const logger = createWideEventLogger({
+    const event = createWideEvent({
       name: typeof options.name === "string" ? options.name : request.method,
       kind: options.kind ?? "http",
       data: resolveRequestData(request, options),
       traceContext: extractTraceContextFromHeaders(request.headers),
     });
-    loggersByRequest.set(request, logger);
+    eventsByRequest.set(request, event);
 
     const closeScope = startWideEventScope();
 
     const finalize = (input: { aborted?: boolean; error?: unknown }): void => {
-      if (logger.hasEmitted()) {
+      if (event.hasEmitted()) {
         closeScope();
         return;
       }
 
       if (input.error !== undefined) {
-        logger.error(input.error);
+        event.addError(input.error);
       }
 
       const hasResponded = response.headersSent;
-      logger.emit({
+      event.emit({
         name: resolveName(request, options.name),
         aborted: input.aborted,
         status: hasResponded ? response.statusCode : undefined,
@@ -149,7 +149,7 @@ export function createExpressWideEventMiddleware(
       finalize({ error });
     });
 
-    runWithLoggerContext(logger, next);
+    runWithWideEvent(event, next);
   };
 }
 
@@ -173,15 +173,15 @@ export function createExpressErrorMiddleware(
   options: ExpressErrorMiddlewareOptions = {},
 ): ErrorRequestHandler {
   return (error, request, _response, next) => {
-    const logger = loggersByRequest.get(request) ?? useLogger();
+    const event = eventsByRequest.get(request) ?? useWideEvent();
     const isFailure = options.isFailure
       ? (guarded(() => options.isFailure?.(error, request)) ?? true)
       : !hasClientStatus(error);
 
     if (isFailure) {
-      logger.error(error);
+      event.addError(error);
     } else {
-      logger.setFields({ error: describeError(error) });
+      event.setFields({ error: describeError(error) });
     }
 
     next(error);

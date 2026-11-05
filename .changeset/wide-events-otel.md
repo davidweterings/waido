@@ -23,10 +23,11 @@ Rework waido around tail sampling and OpenTelemetry. This release has breaking c
 
 **Breaking**
 
-- `withWideContext` returns or rethrows what the work does, and `better-result` is removed. `flush()` and `destroy()` resolve to `{ completed, pending }` and never reject.
-- Enrichers and samplers must be synchronous. `log.emit()` is synchronous and returns the event, or `undefined` if it was dropped. Drains run in the background.
+- The API now uses one noun, so it says what the object is and doesn't imply a particular output. `useLogger` is now `useWideEvent`, `withWideContext` is `withWideEvent`, `createWideEventLogger` is `createWideEvent`, `runWithLoggerContext` is `runWithWideEvent`, `WideEventLogger` is `ActiveWideEvent`, and `log.error()` is `event.addError()`.
+- `withWideEvent` returns or rethrows what the work does, and `better-result` is removed. `flush()` and `destroy()` resolve to `{ completed, pending }` and never reject.
+- Enrichers and samplers must be synchronous. `event.emit()` is synchronous and returns the event, or `undefined` if it was dropped. Drains run in the background.
 - `initWaido` replaces the previous configuration. Invalid configuration throws at startup.
-- Excluded requests get a no-op logger and emit nothing, even on failure. `filter` returns a boolean.
+- Excluded requests get a no-op event and emit nothing, even on failure. `filter` returns a boolean.
 - Payload policy always truncates, with a 64 KiB default. The `drop` and `error` strategies are gone.
 - The Express adapter moves to `waido/express`, and the dead `waido/cron` and `waido/serverless` exports are removed.
 - Event fields change: `sampled`, `traceparent`, `tracestate` and `traceSource` are removed, and `payload` is now `{ sizeBytes, truncated, maxBytes }`. Express fields follow OpenTelemetry names (`http.route`, `http.request.method`, `http.response.status_code`, `url.path`).
