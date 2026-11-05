@@ -3,12 +3,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createConsoleDrain } from "#src/drains.js";
 import { noopWideEvent, ActiveWideEvent } from "#src/active-event.js";
 import { DEFAULT_MAX_BYTES } from "#src/payload.js";
+import { createSpanBinder, type TraceBinding } from "#src/tracing.js";
 import type {
   StartWideEventInput,
   WideEvent,
   WideEventDrain,
   WideEventErrorContext,
-  WideEventIntegrationScope,
   WideEventRuntimeConfig,
   WideEventSampler,
   WideEventTraceContext,
@@ -25,6 +25,7 @@ interface Runtime {
   idGenerator: () => string;
   report: (error: unknown, context: WideEventErrorContext) => void;
   deliver: (event: WideEvent) => void;
+  bindSpan: () => TraceBinding | undefined;
 }
 
 export interface FlushWideEventsOptions {
@@ -88,8 +89,15 @@ function runDrain(
   });
 }
 
+function trackDrainWork(operation: Promise<void>): void {
+  const tracked = operation.finally(() => {
+    pendingDrains.delete(tracked);
+  });
+  pendingDrains.add(tracked);
+}
+
 function createRuntime(config: WideEventRuntimeConfig): Runtime {
-  const { integrations = [], payloadPolicy, emitTimeoutMs, onError } = config;
+  const { payloadPolicy, emitTimeoutMs, onError } = config;
 
   if (payloadPolicy?.maxBytes !== undefined) {
     if (!Number.isFinite(payloadPolicy.maxBytes) || payloadPolicy.maxBytes <= 0) {
@@ -103,13 +111,7 @@ function createRuntime(config: WideEventRuntimeConfig): Runtime {
     throw new RangeError(`emitTimeoutMs must be a positive number. Received: ${emitTimeoutMs}`);
   }
 
-  const integrationDrains = integrations.flatMap((integration) =>
-    integration.drain ? [integration.drain] : [],
-  );
-  const drains = [
-    ...(config.drains ?? (integrationDrains.length > 0 ? [] : [createConsoleDrain()])),
-    ...integrationDrains,
-  ];
+  const drains = config.drains ?? [createConsoleDrain()];
 
   if (drains.some((drain) => typeof drain !== "function")) {
     throw new TypeError("Every drain must be a function");
@@ -122,6 +124,14 @@ function createRuntime(config: WideEventRuntimeConfig): Runtime {
       // A failing error handler has nowhere left to report to.
     }
   };
+
+  drains.forEach((drain, index) => {
+    drain.start?.({
+      report: (error) => {
+        report(error, { stage: "drain", index });
+      },
+    });
+  });
 
   return {
     config: {
@@ -136,12 +146,10 @@ function createRuntime(config: WideEventRuntimeConfig): Runtime {
     report,
     deliver: (event) => {
       drains.forEach((drain, index) => {
-        const operation = runDrain(drain, event, index, emitTimeoutMs, report).finally(() => {
-          pendingDrains.delete(operation);
-        });
-        pendingDrains.add(operation);
+        trackDrainWork(runDrain(drain, event, index, emitTimeoutMs, report));
       });
     },
+    bindSpan: createSpanBinder({ enrichSpans: config.enrichSpans ?? true }),
   };
 }
 
@@ -191,21 +199,30 @@ function isFilteredOut(current: Runtime, input: StartWideEventInput): boolean {
   }
 }
 
-function beginIntegrations(current: Runtime, input: StartWideEventInput) {
-  const scopes: WideEventIntegrationScope[] = [];
+function bindToSpan(current: Runtime, input: StartWideEventInput): TraceBinding | undefined {
+  try {
+    return current.bindSpan();
+  } catch (error) {
+    current.report(error, { stage: "tracing", eventName: input.name });
+    return undefined;
+  }
+}
 
-  (current.config.integrations ?? []).forEach((integration, index) => {
-    try {
-      const scope = integration.begin?.(input);
-      if (scope !== undefined) {
-        scopes.push(scope);
-      }
-    } catch (error) {
-      current.report(error, { stage: "integration", eventName: input.name, index });
+/** Sends anything a drain is still holding, such as a partly filled batch. */
+function flushDrains(current: Runtime): void {
+  current.drains.forEach((drain, index) => {
+    if (drain.flush === undefined) {
+      return;
     }
-  });
 
-  return scopes;
+    trackDrainWork(
+      Promise.resolve()
+        .then(() => drain.flush?.())
+        .catch((error: unknown) => {
+          current.report(error, { stage: "drain", index });
+        }),
+    );
+  });
 }
 
 function extractTraceContext(
@@ -223,7 +240,12 @@ function extractTraceContext(
 /** Sets up a runtime for this process, replacing any previous configuration. */
 export function initWaido(config: WideEventRuntimeConfig = {}): WideEventRuntimeHandle {
   const created = createRuntime(config);
+  const previous = runtime;
   runtime = created;
+
+  if (previous !== undefined) {
+    flushDrains(previous);
+  }
 
   return {
     flush: (options) => flushWideEvents(options),
@@ -250,7 +272,7 @@ export function createWideEvent(input: StartWideEventInput): ActiveWideEvent {
 
   const store = storage.getStore();
   const parent = store === noopWideEvent ? undefined : store;
-  const scopes = beginIntegrations(current, input);
+  const traceBinding = bindToSpan(current, input);
 
   return new ActiveWideEvent(
     {
@@ -259,7 +281,7 @@ export function createWideEvent(input: StartWideEventInput): ActiveWideEvent {
       redact: current.config.redact,
       payloadPolicy: current.config.payloadPolicy,
       now: current.now,
-      scopes,
+      traceBinding,
       deliver: current.deliver,
       report: current.report,
     },
@@ -269,7 +291,7 @@ export function createWideEvent(input: StartWideEventInput): ActiveWideEvent {
         inheritTraceContext(parent),
         input.traceContext,
         extractTraceContext(current, input),
-        ...scopes.map((scope) => scope.traceContext),
+        traceBinding?.traceContext,
       ),
       id: current.idGenerator(),
       parentId: parent?.id,
@@ -345,16 +367,7 @@ function pendingWork(): Promise<unknown>[] {
   return [...activeScopes.values(), ...pendingDrains];
 }
 
-/**
- * Waits for in-flight scopes and drains. Never rejects: check `completed` to see whether everything
- * finished in time.
- */
-export async function flushWideEvents(
-  options: FlushWideEventsOptions = {},
-): Promise<FlushWideEventsResult> {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
-
+async function waitForPendingWork(deadline: number): Promise<void> {
   while (activeScopes.size > 0 || pendingDrains.size > 0) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
@@ -364,12 +377,34 @@ export async function flushWideEvents(
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       Promise.allSettled(pendingWork()),
+      // This timer stays referenced: if only stuck work remains, the process has to stay alive long
+      // enough for the flush to report it, rather than exiting from under the caller.
       new Promise<void>((resolve) => {
-        timer = startTimer(remainingMs, resolve);
+        timer = setTimeout(resolve, remainingMs);
       }),
     ]);
     clearTimeout(timer);
   }
+}
+
+/**
+ * Waits for in-flight scopes and drains, including anything drains are batching. Never rejects:
+ * check `completed` to see whether everything finished in time.
+ */
+export async function flushWideEvents(
+  options: FlushWideEventsOptions = {},
+): Promise<FlushWideEventsResult> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  await waitForPendingWork(deadline);
+
+  // Finished work has now reached the drains, so whatever they are holding can be sent.
+  if (runtime !== undefined) {
+    flushDrains(runtime);
+  }
+
+  await waitForPendingWork(deadline);
 
   const pending = activeScopes.size + pendingDrains.size;
   return { completed: pending === 0, pending };

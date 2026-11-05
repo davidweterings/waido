@@ -1,12 +1,13 @@
 # waido
 
-Wide events for Node.js: one rich event per request, sampled after the work finishes, with optional OpenTelemetry export.
+Wide events for Node.js: one rich event per request, sampled after the work finishes, and sent wherever you want it.
 
 Instead of scattering log lines through your code, you build up one event as a request runs and emit it once at the end. The idea comes from [loggingsucks.com](https://loggingsucks.com/) and Stripe's canonical log lines.
 
 - **One event per unit of work:** read it anywhere with `useWideEvent()`, without passing it around.
 - **Tail sampling:** always keep errors and slow requests, and sample the rest.
-- **OpenTelemetry:** enrich the active span and export kept events as log records.
+- **Send events anywhere:** stdout by default, any OTLP backend with one line, or your own drain.
+- **Works with your tracing:** if your app already uses OpenTelemetry, events pick up its trace IDs and enrich its spans, with no configuration.
 - **Safe by design:** telemetry failures never change what your code returns or throws, and a bad field can't lose an event.
 - **No runtime dependencies:** Node.js 22+, with an Express adapter and a standalone wrapper for everything else.
 
@@ -187,42 +188,60 @@ initWaido({
 
 Without a sampler, every event is kept. `createRateSampler` and `createNameRateSampler` cover simpler cases, a custom sampler is any synchronous function returning a boolean or decision, and `event.setSamplingDecision()` overrides the sampler for one event. If a sampler throws, the event is kept and the error goes to `onError`.
 
-## OpenTelemetry
+## Sending events to a backend
 
-Install `@opentelemetry/api` (1.10 or later) and add the integration. Your application still sets up the OpenTelemetry SDK.
+`createOtlpDrain` sends kept events to anything that accepts OTLP/HTTP, such as an OpenTelemetry Collector or an observability backend. There's nothing else to install or set up.
 
 ```ts
-import { initWaido } from "waido";
-import { otel } from "waido/otel";
+import { createOtlpDrain, initWaido } from "waido";
 
-initWaido({ integrations: [otel()] });
+const waido = initWaido({
+  service: "payments-api",
+  drains: [
+    createOtlpDrain({
+      endpoint: "https://collector.example.com:4318",
+      headers: { authorization: `Bearer ${process.env.BACKEND_TOKEN}` },
+    }),
+  ],
+  onError: (error, context) => console.error(context.stage, error),
+});
 ```
 
-`otel()` does three things:
+- **Standard settings work.** Without options it reads `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_SERVICE_NAME`. With no endpoint at all, it throws at startup.
+- **Events are sent in batches**, when 512 are waiting or after 5 seconds. Call `flush()` or `destroy()` before your process exits, or waiting events are lost.
+- **Failed sends are retried** on 429, 502, 503, 504 and network errors, up to 5 times with backoff, honouring `Retry-After`. Other failures drop the batch.
+- **Nothing fails silently if you set `onError`.** Dropped batches, partial rejections and a full queue (2048 events by default) are all reported there.
 
-- **Trace identity:** `traceId` and `spanId` come from the active span. Without one, a `traceparent` header provides `traceId` and `parentSpanId`.
-- **Span enrichment:** fields are copied onto the recording span, before sampling, so a dropped event still enriches its span. If several events share a span, only the first writes to it, so a nested scope can't overwrite its parent's fields or mark the whole request as failed.
-- **Log records:** kept events are exported as log records named `waido.wide_event`, correlated with the trace. They aren't affected by the span's own sampling, so waido's tail decision is final.
+Events arrive as log records named `waido.wide_event`, with nested fields flattened to dotted names such as `user.id` and `http.route`. Waido's own fields use the `waido.` prefix:
 
-Nested fields are flattened to dotted names, such as `user.id` and `http.route`. Express fields already follow OpenTelemetry's naming. Waido's own fields use the `waido.` prefix:
+| Attribute                                            | Meaning                            |
+| ---------------------------------------------------- | ---------------------------------- |
+| `waido.event.id`, `.name`, `.kind`, `.parent_id`     | Identity                           |
+| `waido.outcome`, `waido.duration_ms`, `waido.status` | Result                             |
+| `waido.error_count`, `error.type`, `exception.*`     | Errors, with details of the first  |
+| `waido.sample_rate`, `waido.sampling.*`              | Multiply counts by the sample rate |
 
-| Attribute                                            | Log record | Span |
-| ---------------------------------------------------- | ---------- | ---- |
-| `waido.event.id`, `.name`, `.kind`, `.parent_id`     | Yes        | Yes  |
-| `waido.outcome`, `waido.duration_ms`, `waido.status` | Yes        | Yes  |
-| `waido.error_count`, `error.type`                    | Yes        | Yes  |
-| `waido.sample_rate`, `waido.sampling.*`              | Yes        | No   |
-| `exception.*` from the first error                   | Yes        | No   |
+If your backend expects another name for the sample rate, use `createOtlpDrain({ sampleRateAttribute: "..." })`.
 
-On spans, each error becomes an exception event, and the status becomes `ERROR` when the outcome is `error`. Spans don't carry the sample rate, because they have their own sampling and would be counted twice. If your backend expects another name for it, use `otel({ sampleRateAttribute: "..." })`.
+The drain sends JSON. The OTLP spec says servers should accept it, not that they must, so a receiver that only takes binary protobuf won't work directly. An OpenTelemetry Collector accepts JSON and can forward to it in any format.
 
-Turn either export off with `otel({ logs: false })` or `otel({ spans: false })`.
+## Working with your tracing
+
+If your app already uses OpenTelemetry tracing, there's nothing to configure. Waido finds it and:
+
+- **Connects events to traces:** `traceId` and `spanId` come from the active span. Without one, a `traceparent` header provides `traceId` and `parentSpanId`.
+- **Enriches spans:** fields are copied onto the recording span before sampling, so a dropped event still enriches its span. Each error becomes an exception event, and the status becomes `ERROR` when the outcome is `error`. Turn this off with `initWaido({ enrichSpans: false })`.
+- **Stays out of your traces:** waido's own export requests aren't traced.
+
+If your app doesn't use tracing, none of this applies and you don't need to install anything. Waido doesn't create spans of its own.
+
+If several events share a span, only the first writes to it, so a nested scope can't overwrite its parent's fields or mark the whole request as failed. The others are still sent in full by your drains.
 
 ### Limitations
 
-- **Log records need a `LoggerProvider`.** Without one registered in your SDK setup, they go nowhere.
+- **Bundlers can hide your tracing from waido.** Waido looks for `@opentelemetry/api` when it starts. If a bundler inlines the package, mark it as external, or events won't connect to your traces.
 - **Aborted requests** may close their span before waido finalizes, so only the waido event is complete.
-- **Attribute limits apply.** SDKs cap spans at 128 attributes by default, so very wide events can lose attributes. Log records have the same default. Raise them with `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` for spans and `new LoggerProvider({ logRecordLimits: { attributeCountLimit: 1000 } })` for log records.
+- **Attribute limits apply to spans.** SDKs cap them at 128 attributes by default, so very wide events can lose some. Raise `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` if you need more.
 - **`error.type` on HTTP server spans** may be replaced by the status code, because HTTP instrumentation writes it last.
 
 ## Finalizing an event
@@ -283,9 +302,9 @@ initWaido({
 });
 ```
 
-If you don't set `drains`, events go to stdout as JSON, unless an integration such as `otel()` provides a drain. Pass `drains: []` to send them nowhere. Without an `onError`, telemetry failures are ignored silently, so it's worth setting one.
+If you don't set `drains`, events go to stdout as JSON. Pass `drains: []` to send them nowhere. Without an `onError`, telemetry failures are ignored silently, so it's worth setting one.
 
-Waido doesn't batch. If your drain makes a network call per event, batch inside the drain, or use `otel()`, where the SDK batches for you.
+A drain is just a function. If yours batches, it can add a `flush` method, which `flush()` and `destroy()` will wait for, and a `start` method to receive a `report` function for failures that happen in the background.
 
 ## Nested work
 
@@ -334,7 +353,8 @@ event.emit({ status: "acked" });
 Run these from `examples/` after `pnpm build`:
 
 - `pnpm express`: Express with tail sampling and error capture.
-- `pnpm otel`: span enrichment and log records through the OpenTelemetry SDK.
+- `pnpm otlp`: sending events to an OTLP backend. Set `OTLP_ENDPOINT`.
+- `pnpm tracing`: events connecting to an app's existing tracing.
 - `pnpm redaction`: redaction with an allowlist.
 - `pnpm sentry`: sending failed events to Sentry, with high-cardinality fields kept out of tags.
 

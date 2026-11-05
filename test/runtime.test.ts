@@ -600,21 +600,6 @@ describe("runtime", () => {
       log.mockRestore();
     });
 
-    it("skips the stdout default when an integration provides a drain", async () => {
-      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-      const events: WideEvent[] = [];
-      const runtime = initWaido({
-        integrations: [{ name: "sink", drain: (event) => void events.push(event) }],
-      });
-
-      await withWideEvent({ name: "job" }, () => undefined);
-      await runtime.flush();
-
-      expect(log).not.toHaveBeenCalled();
-      expect(events).toHaveLength(1);
-      log.mockRestore();
-    });
-
     it("supports a custom console drain writer", async () => {
       const lines: string[] = [];
       const runtime = initWaido({ drains: [createConsoleDrain({ writer: (l) => lines.push(l) })] });
@@ -805,15 +790,7 @@ describe("runtime", () => {
 
     it("keeps a parent span ID when the layers agree on the trace", async () => {
       const { events, runtime } = setup({
-        integrations: [
-          {
-            name: "stub",
-            begin: () => ({
-              traceContext: { traceId: "a".repeat(32), spanId: "c".repeat(16) },
-            }),
-          },
-        ],
-        drains: [(event) => void events.push(event)],
+        traceContextExtractor: () => ({ traceId: "a".repeat(32), spanId: "c".repeat(16) }),
       });
 
       await withWideEvent(

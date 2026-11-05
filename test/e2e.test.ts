@@ -1,5 +1,5 @@
 import { execFileSync, fork, type ChildProcess } from "node:child_process";
-import { rmSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -28,6 +28,11 @@ interface OtlpLogRecord {
   attributes: OtlpKeyValue[];
 }
 
+interface OtlpResourceLogs {
+  resource: { attributes: OtlpKeyValue[] };
+  scopeLogs: Array<{ logRecords: OtlpLogRecord[] }>;
+}
+
 const ROOT = join(import.meta.dirname, "..");
 const SPAN_KIND_SERVER = 2;
 const STATUS_ERROR = 2;
@@ -38,15 +43,19 @@ function attribute(record: { attributes: OtlpKeyValue[] }, key: string): unknown
 }
 
 /**
- * Sends requests through the published package entry points, real instrumentation and the real OTLP
- * exporters, then checks what arrives at a local receiver. No account or network is involved.
+ * Runs an app with its own tracing, using waido through its published entry points and sending to a
+ * local receiver. Spans come from the OpenTelemetry SDK, and log records from waido's own drain. No
+ * account or network is involved.
  */
 describe("end to end over OTLP", () => {
   const spans: OtlpSpan[] = [];
   const logs: OtlpLogRecord[] = [];
+  const logResources: OtlpResourceLogs["resource"][] = [];
+  const logRequestUrls: string[] = [];
   let receiver: Server;
   let app: ChildProcess;
   let baseUrl = "";
+  let endpointUrl = "";
   let flushResult: unknown;
 
   function serverSpan(route: string): OtlpSpan | undefined {
@@ -63,15 +72,21 @@ describe("end to end over OTLP", () => {
       const chunks: Buffer[] = [];
       request.on("data", (chunk: Buffer) => chunks.push(chunk));
       request.on("end", () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString()) as {
+        const text = Buffer.concat(chunks).toString();
+        const body = (text ? JSON.parse(text) : {}) as {
           resourceSpans?: Array<{ scopeSpans: Array<{ spans: OtlpSpan[] }> }>;
-          resourceLogs?: Array<{ scopeLogs: Array<{ logRecords: OtlpLogRecord[] }> }>;
+          resourceLogs?: OtlpResourceLogs[];
         };
+
+        if (body.resourceLogs) {
+          logRequestUrls.push(request.url ?? "");
+        }
 
         for (const resource of body.resourceSpans ?? []) {
           spans.push(...resource.scopeSpans.flatMap((scope) => scope.spans));
         }
         for (const resource of body.resourceLogs ?? []) {
+          logResources.push(resource.resource);
           logs.push(...resource.scopeLogs.flatMap((scope) => scope.logRecords));
         }
 
@@ -80,12 +95,14 @@ describe("end to end over OTLP", () => {
     });
     await new Promise<void>((resolve) => receiver.listen(0, "127.0.0.1", resolve));
 
+    endpointUrl = `http://127.0.0.1:${(receiver.address() as AddressInfo).port}`;
+
     app = fork(join(ROOT, "test/fixtures/otel-app.cjs"), {
       cwd: ROOT,
       env: {
         ...process.env,
         OTEL_SEMCONV_STABILITY_OPT_IN: "http",
-        OTLP_ENDPOINT: `http://127.0.0.1:${(receiver.address() as AddressInfo).port}`,
+        OTLP_ENDPOINT: endpointUrl,
       },
     });
 
@@ -98,6 +115,7 @@ describe("end to end over OTLP", () => {
     await fetch(`${baseUrl}/users/42`, {
       headers: { traceparent: `00-${"a".repeat(32)}-${"b".repeat(16)}-01` },
     });
+    await fetch(`${baseUrl}/outbound`);
     await fetch(`${baseUrl}/handled`);
     await fetch(`${baseUrl}/fail?token=SECRET`);
 
@@ -166,6 +184,70 @@ describe("end to end over OTLP", () => {
     expect(attribute(record, "exception.message")).toBe("payment failed");
     expect(Number(attribute(record, "waido.sample_rate"))).toBe(1);
     expect(attribute(record, "waido.sampling.rule")).toBe("errors");
+  });
+
+  it("sends log records itself, describing the service", () => {
+    expect(logRequestUrls).toEqual(["/v1/logs"]);
+    expect(attribute(logResources[0], "service.name")).toBe("e2e-app");
+    expect(attribute(logResources[0], "deployment.environment.name")).toBe("e2e");
+  });
+
+  it("doesn't trace its own export requests", () => {
+    const urls = spans.map((span) => attribute(span, "url.full"));
+
+    // The app's own fetch is traced, which shows fetch instrumentation is active.
+    expect(urls).toContain(`${endpointUrl}/outbound-target`);
+    expect(urls).not.toContain(`${endpointUrl}/v1/logs`);
+  });
+
+  it("doesn't mention OpenTelemetry in the package's published types", () => {
+    const dist = join(ROOT, "dist");
+    const declarations = readdirSync(dist, { recursive: true, encoding: "utf8" }).filter((file) =>
+      file.endsWith(".d.ts"),
+    );
+
+    expect(declarations.length).toBeGreaterThan(0);
+    for (const file of declarations) {
+      expect(readFileSync(join(dist, file), "utf8")).not.toContain("@opentelemetry");
+    }
+  });
+
+  describe("shutting down", () => {
+    function runScript(source: string): { output: string; durationMs: number } {
+      const startedAt = Date.now();
+      const output = execFileSync(process.execPath, ["--input-type=module", "-e", source], {
+        cwd: ROOT,
+        encoding: "utf8",
+        timeout: 20_000,
+      });
+
+      return { output, durationMs: Date.now() - startedAt };
+    }
+
+    it("reports a stuck drain instead of the process exiting mid-flush", () => {
+      const { output } = runScript(`
+        import { createWideEvent, initWaido } from "waido";
+        const waido = initWaido({ drains: [() => new Promise(() => {})] });
+        createWideEvent({ name: "stuck" }).emit();
+        console.log(JSON.stringify(await waido.flush({ timeoutMs: 50 })));
+      `);
+
+      expect(JSON.parse(output)).toEqual({ completed: false, pending: 1 });
+    });
+
+    it("exits promptly after a timed-out destroy, even with retries left", () => {
+      const { output, durationMs } = runScript(`
+        import { createOtlpDrain, createWideEvent, initWaido } from "waido";
+        const waido = initWaido({
+          drains: [createOtlpDrain({ endpoint: "http://127.0.0.1:1", initialRetryDelayMs: 60000 })],
+        });
+        createWideEvent({ name: "unsendable" }).emit();
+        console.log(JSON.stringify(await waido.destroy({ timeoutMs: 200 })));
+      `);
+
+      expect(JSON.parse(output)).toMatchObject({ completed: false });
+      expect(durationMs).toBeLessThan(10_000);
+    });
   });
 
   it("never exports the query string", () => {

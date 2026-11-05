@@ -2,12 +2,13 @@
 "waido": minor
 ---
 
-Rework waido around tail sampling and OpenTelemetry. This release has breaking changes.
+Rework waido around tail sampling, with export to any OTLP backend. This release has breaking changes.
 
 **Added**
 
 - `createTailSampler` with `errors()`, `slowerThan()` and `traceSampled()` keep rules. Sampling is derived from the trace ID, and events record a 1-in-N `sampling.sampleRate`.
-- `waido/otel`: `otel()` takes IDs from the active span, copies fields onto it, and exports kept events as log records.
+- `createOtlpDrain` sends kept events to any OTLP/HTTP receiver, in batches and with retries, with no other packages needed.
+- If the app uses OpenTelemetry tracing, events pick up its trace IDs and enrich the active span automatically. Turn enrichment off with `enrichSpans: false`.
 - `createExpressErrorMiddleware` from `waido/express`, so thrown errors reach the event.
 - `createRedactor` and a `redact` option.
 - Nested scopes set `parentId`. Events go to stdout as JSON when no drains are configured.
@@ -30,5 +31,6 @@ Rework waido around tail sampling and OpenTelemetry. This release has breaking c
 - Excluded requests get a no-op event and emit nothing, even on failure. `filter` returns a boolean.
 - Payload policy always truncates, with a 64 KiB default. The `drop` and `error` strategies are gone.
 - The Express adapter moves to `waido/express`, and the dead `waido/cron` and `waido/serverless` exports are removed.
+- Drains can have `start` and `flush` methods. Plain functions still work.
 - Event fields change: `sampled`, `traceparent`, `tracestate` and `traceSource` are removed, and `payload` is now `{ sizeBytes, truncated, maxBytes }`. Express fields follow OpenTelemetry names (`http.route`, `http.request.method`, `http.response.status_code`, `url.path`).
 - Removed: `emitters` and their aliases, `set*`/`add*` runtime functions, `composeSamplers`, `*Result` samplers, `resolveIncludeExcludeDecision`, and `createConsoleEmitter` (now `createConsoleDrain`). `onEnricherError` and `onDrainError` are now `onError`.

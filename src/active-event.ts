@@ -1,6 +1,7 @@
 import { normalizeError } from "#src/error.js";
 import { applyPayloadPolicy } from "#src/payload.js";
 import { normalizeSamplingDecision } from "#src/sampler.js";
+import type { TraceBinding } from "#src/tracing.js";
 import type {
   EmitWideEventInput,
   StartWideEventInput,
@@ -12,7 +13,6 @@ import type {
   WideEventError,
   WideEventErrorContext,
   WideEventErrorDetails,
-  WideEventIntegrationScope,
   WideEventKind,
   WideEventOutcome,
   WideEventPayloadPolicy,
@@ -31,7 +31,7 @@ export interface ActiveWideEventDependencies {
   redact?: WideEventRedactor;
   payloadPolicy?: WideEventPayloadPolicy;
   now: () => Date;
-  scopes: WideEventIntegrationScope[];
+  traceBinding?: TraceBinding;
   deliver: (event: WideEvent) => void;
   report: (error: unknown, context: WideEventErrorContext) => void;
 }
@@ -263,13 +263,11 @@ export class ActiveWideEvent {
     const payload = applyPayloadPolicy(draft, this.dependencies.payloadPolicy);
     const candidate: WideEventCandidate = { ...draft, payload };
 
-    this.dependencies.scopes.forEach((scope, index) => {
-      try {
-        scope.onFinalize?.(candidate);
-      } catch (error) {
-        this.report(error, "integration", index);
-      }
-    });
+    try {
+      this.dependencies.traceBinding?.onFinalize(candidate);
+    } catch (error) {
+      this.report(error, "tracing");
+    }
 
     const decision = this.resolveSamplingDecision(candidate);
     if (!decision.sampled) {
@@ -459,7 +457,6 @@ class NoopWideEvent extends ActiveWideEvent {
         sampler: () => false,
         enrichers: [],
         now: () => new Date(0),
-        scopes: [],
         deliver: () => undefined,
         report: () => undefined,
       },

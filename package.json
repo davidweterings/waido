@@ -1,7 +1,7 @@
 {
   "name": "waido",
   "version": "0.4.0",
-  "description": "Wide events for Node.js: one rich event per request, tail sampling, and OpenTelemetry export",
+  "description": "Wide events for Node.js: one rich event per request, tail sampling, and export to any OTLP backend",
   "keywords": [
     "asynclocalstorage",
     "canonical-log-line",
@@ -9,6 +9,7 @@
     "express",
     "observability",
     "opentelemetry",
+    "otlp",
     "tail-sampling",
     "wide-events"
   ],
@@ -44,10 +45,6 @@
     "./express": {
       "types": "./dist/adapters/express.d.ts",
       "import": "./dist/adapters/express.js"
-    },
-    "./otel": {
-      "types": "./dist/otel.d.ts",
-      "import": "./dist/otel.js"
     }
   },
   "publishConfig": {
@@ -71,13 +68,12 @@
   "devDependencies": {
     "@changesets/cli": "^2.30.0",
     "@opentelemetry/api": "^1.10.0",
-    "@opentelemetry/exporter-logs-otlp-http": "^0.300.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.300.0",
     "@opentelemetry/instrumentation": "^0.300.0",
     "@opentelemetry/instrumentation-express": "^0.72.0",
     "@opentelemetry/instrumentation-http": "^0.300.0",
+    "@opentelemetry/instrumentation-undici": "^0.34.0",
     "@opentelemetry/resources": "^3.0.0",
-    "@opentelemetry/sdk-logs": "^3.0.0",
     "@opentelemetry/sdk-trace-base": "^2.12.0",
     "@opentelemetry/sdk-trace-node": "^2.12.0",
     "@types/express": "^5.0.3",
@@ -92,7 +88,7 @@
     "vitest": "^2.1.8"
   },
   "peerDependencies": {
-    "@opentelemetry/api": "^1.10.0",
+    "@opentelemetry/api": "^1.9.0",
     "express": "^4.0.0 || ^5.0.0"
   },
   "peerDependenciesMeta": {

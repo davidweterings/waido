@@ -8,6 +8,7 @@ export {
 } from "#src/runtime.js";
 export { ActiveWideEvent } from "#src/active-event.js";
 export { createConsoleDrain } from "#src/drains.js";
+export { createOtlpDrain } from "#src/otlp.js";
 export {
   createNameRateSampler,
   createRateSampler,
@@ -27,6 +28,7 @@ export type {
   WideEventData,
   WideEventDraft,
   WideEventDrain,
+  WideEventDrainContext,
   WideEventEnrichContext,
   WideEventEnricher,
   WideEventError,
@@ -34,8 +36,6 @@ export type {
   WideEventErrorDetails,
   WideEventErrorStage,
   WideEventFilter,
-  WideEventIntegration,
-  WideEventIntegrationScope,
   WideEventKeepRule,
   WideEventKind,
   WideEventOutcome,
@@ -52,6 +52,7 @@ export type {
 } from "#src/types.js";
 export type { StructuredErrorInit } from "#src/error.js";
 export type { ConsoleDrainOptions } from "#src/drains.js";
+export type { OtlpDrainOptions } from "#src/otlp.js";
 export type { RedactorOptions } from "#src/redact.js";
 export type { TailSamplerOptions } from "#src/sampler.js";
 export type {
