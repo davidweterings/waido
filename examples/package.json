@@ -2,13 +2,23 @@
   "name": "waido-examples",
   "private": true,
   "type": "module",
+  "scripts": {
+    "express": "tsx express-console.ts",
+    "otel": "tsx emit-to-opentelemetry.ts",
+    "redaction": "tsx redaction-allowlist.ts",
+    "sentry": "tsx sentry-exception-drain.ts"
+  },
   "dependencies": {
-    "@opentelemetry/api": "*",
+    "@opentelemetry/api": "^1.10.0",
+    "@opentelemetry/sdk-logs": "^3.0.0",
+    "@opentelemetry/sdk-trace-node": "^2.12.0",
     "@sentry/node": "*",
-    "express": "*"
+    "express": "^5.1.0",
+    "waido": "workspace:*"
   },
   "devDependencies": {
     "@types/express": "*",
-    "@types/node": "*"
+    "@types/node": "*",
+    "tsx": "^4.19.0"
   }
 }

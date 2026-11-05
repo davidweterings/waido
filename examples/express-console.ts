@@ -1,33 +1,30 @@
 import express from "express";
-
 import {
-  createConsoleEmitter,
-  createExpressWideEventMiddleware,
+  createConsoleDrain,
+  createTailSampler,
+  errors,
   initWaido,
+  slowerThan,
   useLogger,
-} from "../src/index.js";
+} from "waido";
+import { createExpressErrorMiddleware, createExpressWideEventMiddleware } from "waido/express";
 
 const waido = initWaido({
   service: "payments-api",
-  emitTimeoutMs: 2_000,
-  drains: [createConsoleEmitter({ pretty: true })],
+  sampler: createTailSampler({ keep: [errors(), slowerThan(2_000)], rate: 1 }),
+  drains: [createConsoleDrain({ pretty: true })],
 });
 
 const app = express();
 app.use(express.json());
-app.use(
-  createExpressWideEventMiddleware({
-    excludePaths: ["/checkout/health"],
-    emitTimeoutMs: 2_000,
-  }),
-);
+app.use(createExpressWideEventMiddleware({ excludePaths: ["/checkout/health"] }));
 
 app.get("/cart", async (req, res) => {
   const log = useLogger();
 
   log.setFields({
     cart: {
-      id: '123'
+      id: "123",
     },
   });
 
@@ -61,6 +58,13 @@ app.post("/checkout", async (req, res) => {
     ok: true,
   });
 });
+
+app.get("/boom", () => {
+  throw new Error("Something broke");
+});
+
+// Mount this after your routes, so thrown errors reach the event.
+app.use(createExpressErrorMiddleware());
 
 const server = app.listen(3000, () => {
   console.log("http://localhost:3000");

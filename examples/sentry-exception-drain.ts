@@ -1,7 +1,6 @@
 import * as Sentry from "@sentry/node";
-
-import { initWaido, useLogger, withWideContext } from "../src/index.js";
-import type { WideEvent } from "../src/index.js";
+import { initWaido, useLogger, withWideContext } from "waido";
+import type { WideEvent } from "waido";
 
 type SentryTagValue = string | number | boolean | undefined;
 
@@ -56,14 +55,13 @@ function createSentryExceptionDrain(): (event: WideEvent) => void {
         id: event.id,
         status: event.status ? String(event.status) : "n/a",
         durationMs: event.durationMs,
-        sampled: event.sampled,
         samplingReason: event.sampling.reason ?? "n/a",
         samplingRule: event.sampling.rule ?? "n/a",
         traceId: event.traceId,
         spanId: event.spanId,
       });
 
-      scope.setContext("wide_event_data", event.data as Record<string, unknown>);
+      scope.setContext("wide_event_data", event.data);
 
       for (const err of event.errors) {
         scope.setContext("wide_event_error", {
@@ -83,46 +81,33 @@ Sentry.init({
   environment: process.env.NODE_ENV ?? "development",
 });
 
-initWaido({
+const waido = initWaido({
   service: "payments-api",
   drains: [createSentryExceptionDrain()],
 });
 
-const result = await withWideContext(
-  {
-    name: "checkout",
-    kind: "function",
-  },
-  async () => {
-    const log = useLogger();
+await withWideContext({ name: "checkout", kind: "function" }, () => {
+  const log = useLogger();
 
-    try {
-      throw new Error("Card declined");
-    } catch (error) {
-      log.error(
-        error,
-        {
-          orderId: "ord_42",
-        },
-        {
-          code: "PAYMENT_DECLINED",
-          why: "Issuer declined the card.",
-          fix: "Retry with a different card.",
-          link: "https://docs.example.com/payments/errors#payment_declined",
-        },
-      );
+  try {
+    throw new Error("Card declined");
+  } catch (error) {
+    // Recording the error is enough to make the outcome "error".
+    log.setStatus(402);
+    log.error(
+      error,
+      {
+        orderId: "ord_42",
+      },
+      {
+        code: "PAYMENT_DECLINED",
+        why: "Issuer declined the card.",
+        fix: "Retry with a different card.",
+        link: "https://docs.example.com/payments/errors#payment_declined",
+      },
+    );
+  }
+});
 
-      // Ensure the event is emitted as an error when the function returns successfully.
-      await log.emit({
-        outcome: "error",
-        status: 402,
-      });
-    }
-  },
-);
-
-if (result.isErr()) {
-  console.error("checkout failed", result.error);
-}
-
+await waido.destroy();
 await Sentry.flush(2_000);
